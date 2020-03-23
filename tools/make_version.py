@@ -101,7 +101,7 @@ def main():
         parser.add_argument(
             '--no_git_hash',
             action='store_true',
-            default=False,
+            default=True,
             help=('Don\'t try to call git to derive things like '
                   'git revision hash.'))
         parser.add_argument(

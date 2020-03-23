@@ -1183,6 +1183,13 @@ DART_EXPORT void Dart_HintFreed(intptr_t size);
 DART_EXPORT void Dart_NotifyIdle(int64_t deadline);
 
 /**
+* Notifies the VM that the embedder wants to do garbage collection immediately.
+*
+* Requires there to be a current isolate.
+*/
+DART_EXPORT void Dart_NotifyGC(int64_t flag);
+
+/**
  * Notifies the VM that the system is running low on memory.
  *
  * Does not require a current isolate. Only valid after calling Dart_Initialize.

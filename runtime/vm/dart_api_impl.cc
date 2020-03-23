@@ -26,6 +26,7 @@
 #include "vm/exceptions.h"
 #include "vm/flags.h"
 #include "vm/growable_array.h"
+#include "vm/heap/heap.h"
 #include "vm/heap/verifier.h"
 #include "vm/image_snapshot.h"
 #include "vm/isolate_reload.h"
@@ -1789,6 +1790,19 @@ DART_EXPORT void Dart_NotifyIdle(int64_t deadline) {
   API_TIMELINE_BEGIN_END(T);
   TransitionNativeToVM transition(T);
   T->isolate()->group()->idle_time_handler()->NotifyIdle(deadline);
+}
+
+DART_EXPORT void Dart_NotifyGC(int64_t flag) {
+  Thread* T = Thread::Current();
+  CHECK_ISOLATE(T->isolate());
+  API_TIMELINE_BEGIN_END(T);
+  TransitionNativeToVM transition(T);
+  if (flag >= 0 && flag <= Heap::kDebugging - Heap::kNewSpace) {
+    T->isolate()->heap()->CollectAllGarbage(
+        (Heap::GCReason)(Heap::kNewSpace + flag));
+  } else {
+    T->isolate()->heap()->CollectAllGarbage();
+  }
 }
 
 DART_EXPORT void Dart_NotifyLowMemory() {
