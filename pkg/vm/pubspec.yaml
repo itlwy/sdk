@@ -5,7 +5,9 @@ description: VM specific Dart code and helper scripts
 
 dependencies:
   build_integration:
-    path: ../build_integration
+    git:
+      url: https://github.com/alibaba-flutter/sdk.git
+      path: pkg/build_integration
   front_end: ^0.1.6
   kernel: ^0.3.6
 
