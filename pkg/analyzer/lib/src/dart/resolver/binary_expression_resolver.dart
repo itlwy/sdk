@@ -18,7 +18,6 @@ import 'package:analyzer/src/dart/resolver/type_property_resolver.dart';
 import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/generated/resolver.dart';
 import 'package:analyzer/src/generated/type_promotion_manager.dart';
-import 'package:analyzer/src/task/strong/checker.dart';
 import 'package:meta/meta.dart';
 
 /// Helper for resolving [BinaryExpression]s.
@@ -107,29 +106,6 @@ class BinaryExpressionResolver {
     );
   }
 
-  /// Gets the definite type of expression, which can be used in cases where
-  /// the most precise type is desired, for example computing the least upper
-  /// bound.
-  ///
-  /// See [getExpressionType] for more information. Without strong mode, this is
-  /// equivalent to [_getStaticType].
-  ///
-  /// TODO(scheglov) this is duplicate
-  DartType _getExpressionType(Expression expr, {bool read = false}) =>
-      getExpressionType(expr, _typeSystem, _typeProvider, read: read);
-
-  /// Return the static type of the given [expression] that is to be used for
-  /// type analysis.
-  ///
-  /// TODO(scheglov) this is duplicate
-  DartType _getStaticType(Expression expression, {bool read = false}) {
-    if (expression is NullLiteral) {
-      return _typeProvider.nullType;
-    }
-    DartType type = read ? getReadType(expression) : expression.staticType;
-    return _resolveTypeParameter(type);
-  }
-
   void _resolveEqual(BinaryExpressionImpl node, {@required bool notEqual}) {
     var left = node.leftOperand;
     left.accept(_resolver);
@@ -170,7 +146,7 @@ class BinaryExpressionResolver {
 
     left.accept(_resolver);
     left = node.leftOperand;
-    var leftType = _getExpressionType(left, read: false);
+    var leftType = left.staticType;
 
     var rightContextType = InferenceContext.getContext(node);
     if (rightContextType == null || rightContextType.isDynamic) {
@@ -183,9 +159,7 @@ class BinaryExpressionResolver {
     right = node.rightOperand;
     flow?.ifNullExpression_end();
 
-    // TODO(scheglov) This (and above) is absolutely wrong, and convoluted.
-    // This is just the status quo, until we can make types straight.
-    var rightType = _getExpressionType(right, read: false);
+    var rightType = right.staticType;
     if (_isNonNullableByDefault) {
       var promotedLeftType = _typeSystem.promoteToNonNull(leftType);
       _analyzeLeastUpperBoundTypes(node, promotedLeftType, rightType);
@@ -202,6 +176,7 @@ class BinaryExpressionResolver {
     InferenceContext.setType(left, _typeProvider.boolType);
     InferenceContext.setType(right, _typeProvider.boolType);
 
+    flow?.logicalBinaryOp_begin();
     left.accept(_resolver);
     left = node.leftOperand;
 
@@ -239,6 +214,7 @@ class BinaryExpressionResolver {
     InferenceContext.setType(left, _typeProvider.boolType);
     InferenceContext.setType(right, _typeProvider.boolType);
 
+    flow?.logicalBinaryOp_begin();
     left.accept(_resolver);
     left = node.leftOperand;
 
@@ -320,7 +296,8 @@ class BinaryExpressionResolver {
       return;
     }
 
-    var leftType = _getStaticType(leftOperand);
+    var leftType = leftOperand.staticType;
+    leftType = _resolveTypeParameter(leftType);
 
     if (identical(leftType, NeverTypeImpl.instance)) {
       _resolver.errorReporter.reportErrorForNode(
@@ -362,16 +339,21 @@ class BinaryExpressionResolver {
   }
 
   void _resolveUserDefinableType(BinaryExpressionImpl node) {
-    if (identical(node.leftOperand.staticType, NeverTypeImpl.instance)) {
+    var leftOperand = node.leftOperand;
+
+    var leftType = leftOperand.staticType;
+    leftType = _resolveTypeParameter(leftType);
+
+    if (identical(leftType, NeverTypeImpl.instance)) {
       _inferenceHelper.recordStaticType(node, NeverTypeImpl.instance);
       return;
     }
 
     DartType staticType =
         node.staticInvokeType?.returnType ?? DynamicTypeImpl.instance;
-    if (node.leftOperand is! ExtensionOverride) {
+    if (leftOperand is! ExtensionOverride) {
       staticType = _typeSystem.refineBinaryExpressionType(
-        _getStaticType(node.leftOperand),
+        leftType,
         node.operator.type,
         node.rightOperand.staticType,
         staticType,

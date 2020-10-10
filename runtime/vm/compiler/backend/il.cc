@@ -2918,8 +2918,9 @@ Definition* LoadFieldInstr::Canonicalize(FlowGraph* flow_graph) {
       }
     } else if (AllocateTypedDataInstr* alloc_typed_data =
                    array->AsAllocateTypedData()) {
-      ASSERT(slot().kind() == Slot::Kind::kTypedDataBase_length);
-      return alloc_typed_data->num_elements()->definition();
+      if (slot().kind() == Slot::Kind::kTypedDataBase_length) {
+        return alloc_typed_data->num_elements()->definition();
+      }
     } else if (LoadFieldInstr* load_array = array->AsLoadField()) {
       // For arrays with guarded lengths, replace the length load
       // with a constant.
@@ -3109,7 +3110,7 @@ Definition* AssertAssignableInstr::Canonicalize(FlowGraph* flow_graph) {
     if (new_dst_type.IsTypeRef()) {
       new_dst_type = TypeRef::Cast(new_dst_type).type();
     }
-    new_dst_type = new_dst_type.Canonicalize();
+    new_dst_type = new_dst_type.Canonicalize(Thread::Current(), nullptr);
 
     // Successfully instantiated destination type: update the type attached
     // to this instruction and set type arguments to null because we no

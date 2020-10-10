@@ -114,8 +114,6 @@ import 'dead_null_aware_expression_test.dart' as dead_null_aware_expression;
 import 'default_list_constructor_test.dart' as default_list_constructor;
 import 'default_value_in_function_type_test.dart'
     as default_value_in_function_type;
-import 'default_value_in_function_typed_parameter_test.dart'
-    as default_value_in_function_typed_parameter;
 import 'default_value_in_redirecting_factory_constructor_test.dart'
     as default_value_in_redirecting_factory_constructor;
 import 'default_value_on_required_parameter_test.dart'
@@ -346,6 +344,13 @@ import 'late_final_local_already_assigned_test.dart'
     as late_final_local_already_assigned;
 import 'list_element_type_not_assignable_test.dart'
     as list_element_type_not_assignable;
+import 'main_first_positional_parameter_type_test.dart'
+    as main_first_positional_parameter_type;
+import 'main_has_required_named_parameters_test.dart'
+    as main_has_required_named_parameters;
+import 'main_has_too_many_required_positional_parameters_test.dart'
+    as main_has_too_many_required_positional_parameters;
+import 'main_is_not_function_test.dart' as main_is_not_function;
 import 'map_entry_not_in_map_test.dart' as map_entry_not_in_map;
 import 'map_key_type_not_assignable_test.dart' as map_key_type_not_assignable;
 import 'map_value_type_not_assignable_test.dart'
@@ -725,7 +730,6 @@ main() {
     dead_null_aware_expression.main();
     default_list_constructor.main();
     default_value_in_function_type.main();
-    default_value_in_function_typed_parameter.main();
     default_value_in_redirecting_factory_constructor.main();
     default_value_on_required_parameter.main();
     deferred_import_of_extension.main();
@@ -875,6 +879,10 @@ main() {
     late_final_field_with_const_constructor.main();
     late_final_local_already_assigned.main();
     list_element_type_not_assignable.main();
+    main_first_positional_parameter_type.main();
+    main_has_required_named_parameters.main();
+    main_has_too_many_required_positional_parameters.main();
+    main_is_not_function.main();
     map_entry_not_in_map.main();
     map_key_type_not_assignable.main();
     map_value_type_not_assignable.main();

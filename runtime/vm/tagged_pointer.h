@@ -224,7 +224,6 @@ inline std::ostream& operator<<(std::ostream& os, const ObjectPtr& obj) {
         : base##Ptr(other) {}                                                  \
     klass##Ptr() : base##Ptr() {}                                              \
     explicit constexpr klass##Ptr(uword tagged) : base##Ptr(tagged) {}         \
-    explicit constexpr klass##Ptr(intptr_t tagged) : base##Ptr(tagged) {}      \
     constexpr klass##Ptr(std::nullptr_t) : base##Ptr(nullptr) {} /* NOLINT */  \
     explicit klass##Ptr(const ObjectLayout* untagged)                          \
         : base##Ptr(reinterpret_cast<uword>(untagged) + kHeapObjectTag) {}     \
@@ -242,7 +241,6 @@ DEFINE_TAGGED_POINTER(Script, Object)
 DEFINE_TAGGED_POINTER(Library, Object)
 DEFINE_TAGGED_POINTER(Namespace, Object)
 DEFINE_TAGGED_POINTER(KernelProgramInfo, Object)
-DEFINE_TAGGED_POINTER(ImageHeader, Object)
 DEFINE_TAGGED_POINTER(WeakSerializationReference, Object)
 DEFINE_TAGGED_POINTER(Code, Object)
 DEFINE_TAGGED_POINTER(Bytecode, Object)

@@ -755,17 +755,6 @@ void ScopeBuilder::VisitExpression() {
       // read interface_target_reference.
       helper_.SkipInterfaceMemberNameReference();
       return;
-    case kDirectPropertyGet:
-      helper_.ReadPosition();                // read position.
-      VisitExpression();                     // read receiver.
-      helper_.SkipInterfaceMemberNameReference();  // read target_reference.
-      return;
-    case kDirectPropertySet:
-      helper_.ReadPosition();                // read position.
-      VisitExpression();                     // read receiver.
-      helper_.SkipInterfaceMemberNameReference();  // read target_reference.
-      VisitExpression();                     // read value·
-      return;
     case kSuperPropertyGet:
       HandleLoadReceiver();
       helper_.ReadPosition();                // read position.
@@ -795,12 +784,6 @@ void ScopeBuilder::VisitExpression() {
       VisitArguments();        // read arguments.
       // read interface_target_reference.
       helper_.SkipInterfaceMemberNameReference();
-      return;
-    case kDirectMethodInvocation:
-      helper_.ReadPosition();                // read position.
-      VisitExpression();                     // read receiver.
-      helper_.SkipInterfaceMemberNameReference();  // read target_reference.
-      VisitArguments();                      // read arguments.
       return;
     case kSuperMethodInvocation:
       HandleLoadReceiver();
@@ -1601,6 +1584,9 @@ void ScopeBuilder::AddVariableDeclarationParameter(
       helper.IsCovariant() ||
       (helper.IsGenericCovariantImpl() &&
        (attrs.has_non_this_uses || attrs.has_tearoff_uses));
+  if (needs_covariant_check_in_method) {
+    variable->set_needs_covariant_check_in_method();
+  }
 
   switch (type_check_mode) {
     case kTypeCheckAllParameters:

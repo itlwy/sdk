@@ -166,6 +166,9 @@ const AllowedExperimentalFlags defaultAllowedExperimentalFlags =
   "flutter": {
     ExperimentalFlag.nonNullable,
   },
+  "flutter_driver": {
+    ExperimentalFlag.nonNullable,
+  },
   "flutter_test": {
     ExperimentalFlag.nonNullable,
   },
@@ -175,7 +178,19 @@ const AllowedExperimentalFlags defaultAllowedExperimentalFlags =
   "flutter_goldens_client": {
     ExperimentalFlag.nonNullable,
   },
+  "http": {
+    ExperimentalFlag.nonNullable,
+  },
+  "http_parser": {
+    ExperimentalFlag.nonNullable,
+  },
+  "intl": {
+    ExperimentalFlag.nonNullable,
+  },
   "js": {
+    ExperimentalFlag.nonNullable,
+  },
+  "logging": {
     ExperimentalFlag.nonNullable,
   },
   "matcher": {
@@ -200,6 +215,9 @@ const AllowedExperimentalFlags defaultAllowedExperimentalFlags =
     ExperimentalFlag.nonNullable,
   },
   "process": {
+    ExperimentalFlag.nonNullable,
+  },
+  "pub_semver": {
     ExperimentalFlag.nonNullable,
   },
   "sky_engine": {

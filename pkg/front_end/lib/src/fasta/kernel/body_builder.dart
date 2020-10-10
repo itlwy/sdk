@@ -1773,6 +1773,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     }
   }
 
+  /// Handle `a && b` and `a || b`.
   void doLogicalExpression(Token token) {
     Expression argument = popForValue();
     Expression receiver = pop();
@@ -2394,10 +2395,31 @@ class BodyBuilder extends ScopeListener<JumpTarget>
   }
 
   @override
+  void beginVariableInitializer(Token token) {
+    if ((currentLocalVariableModifiers & lateMask) != 0) {
+      // This is matched by the call to [endNode] in [endVariableInitializer].
+      typeInferrer?.assignedVariables?.beginNode();
+    }
+  }
+
+  @override
   void endVariableInitializer(Token assignmentOperator) {
     debugEvent("VariableInitializer");
     assert(assignmentOperator.stringValue == "=");
-    pushNewLocalVariable(popForValue(), equalsToken: assignmentOperator);
+    AssignedVariablesNodeInfo<VariableDeclaration> assignedVariablesInfo;
+    bool isLate = (currentLocalVariableModifiers & lateMask) != 0;
+    Expression initializer = popForValue();
+    if (isLate) {
+      assignedVariablesInfo = typeInferrer?.assignedVariables
+          ?.deferNode(isClosureOrLateVariableInitializer: true);
+    }
+    pushNewLocalVariable(initializer, equalsToken: assignmentOperator);
+    if (isLate) {
+      VariableDeclaration node = peek();
+      // This is matched by the call to [beginNode] in
+      // [beginVariableInitializer].
+      typeInferrer?.assignedVariables?.storeInfo(node, assignedVariablesInfo);
+    }
   }
 
   @override
@@ -2455,7 +2477,10 @@ class BodyBuilder extends ScopeListener<JumpTarget>
         isConst: isConst,
         isLate: isLate,
         isRequired: isRequired,
-        hasDeclaredInitializer: initializer != null)
+        hasDeclaredInitializer: initializer != null,
+        isStaticLate: libraryBuilder.isNonNullableByDefault &&
+            isFinal &&
+            initializer == null)
       ..fileOffset = identifier.charOffset
       ..fileEqualsOffset = offsetForToken(equalsToken);
     typeInferrer?.assignedVariables?.declare(variable);
@@ -2728,7 +2753,14 @@ class BodyBuilder extends ScopeListener<JumpTarget>
   @override
   void handleForInitializerLocalVariableDeclaration(Token token, bool forIn) {
     debugEvent("ForInitializerLocalVariableDeclaration");
-    if (!forIn) {
+    if (forIn) {
+      // If the declaration is of the form `for (final x in ...)`, then we may
+      // have erroneously set the `isStaticLate` flag, so un-set it.
+      Object declaration = peek();
+      if (declaration is VariableDeclarationImpl) {
+        declaration.isStaticLate = false;
+      }
+    } else {
       // This is matched by the call to [deferNode] in [endForStatement] or
       // [endForControlFlow].
       typeInferrer?.assignedVariables?.beginNode();
@@ -2774,7 +2806,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     // [handleForInitializerExpressionStatement], and
     // [handleForInitializerLocalVariableDeclaration].
     AssignedVariablesNodeInfo<VariableDeclaration> assignedVariablesNodeInfo =
-        typeInferrer?.assignedVariables?.deferNode();
+        typeInferrer?.assignedVariables?.popNode();
 
     Object variableOrExpression = pop();
     exitLocalScope();
@@ -2782,6 +2814,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     transformCollections = true;
     List<VariableDeclaration> variables =
         _buildForLoopVariableDeclarations(variableOrExpression);
+    typeInferrer?.assignedVariables?.pushNode(assignedVariablesNodeInfo);
     Expression condition;
     if (conditionStatement is ExpressionStatement) {
       condition = conditionStatement.expression;
@@ -2791,14 +2824,12 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     if (entry is MapEntry) {
       ForMapEntry result = forest.createForMapEntry(
           offsetForToken(forToken), variables, condition, updates, entry);
-      typeInferrer?.assignedVariables
-          ?.storeInfo(result, assignedVariablesNodeInfo);
+      typeInferrer?.assignedVariables?.endNode(result);
       push(result);
     } else {
       ForElement result = forest.createForElement(offsetForToken(forToken),
           variables, condition, updates, toValue(entry));
-      typeInferrer?.assignedVariables
-          ?.storeInfo(result, assignedVariablesNodeInfo);
+      typeInferrer?.assignedVariables?.endNode(result);
       push(result);
     }
   }
@@ -4559,6 +4590,11 @@ class BodyBuilder extends ScopeListener<JumpTarget>
 
   @override
   void handleElseControlFlow(Token elseToken) {
+    // Resolve the top of the stack so that if it's a delayed assignment it
+    // happens before we go into the else block.
+    Object node = pop();
+    if (node is! MapEntry) node = toValue(node);
+    push(node);
     typePromoter?.enterElse();
   }
 
@@ -4568,8 +4604,6 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     Object entry = pop();
     Object condition = pop(); // parenthesized expression
     Token ifToken = pop();
-    typePromoter?.enterElse();
-    typePromoter?.exitConditional();
 
     transformCollections = true;
     if (entry is MapEntry) {
@@ -4579,6 +4613,8 @@ class BodyBuilder extends ScopeListener<JumpTarget>
       push(forest.createIfElement(
           offsetForToken(ifToken), toValue(condition), toValue(entry)));
     }
+    typePromoter?.enterElse();
+    typePromoter?.exitConditional();
   }
 
   @override
@@ -4837,8 +4873,8 @@ class BodyBuilder extends ScopeListener<JumpTarget>
           ..fileOffset = formals.charOffset;
         exitLocalScope();
         // This is matched by the call to [beginNode] in [enterFunction].
-        typeInferrer?.assignedVariables
-            ?.endNode(variable.initializer, isClosure: true);
+        typeInferrer?.assignedVariables?.endNode(variable.initializer,
+            isClosureOrLateVariableInitializer: true);
         Expression expression = new NamedFunctionExpressionJudgment(variable);
         if (oldInitializer != null) {
           // This must have been a compile-time error.
@@ -4869,7 +4905,8 @@ class BodyBuilder extends ScopeListener<JumpTarget>
           push(declaration);
         }
         // This is matched by the call to [beginNode] in [enterFunction].
-        typeInferrer?.assignedVariables?.endNode(declaration, isClosure: true);
+        typeInferrer?.assignedVariables
+            ?.endNode(declaration, isClosureOrLateVariableInitializer: true);
       }
     } else {
       return unhandled("${declaration.runtimeType}", "pushNamedFunction",
@@ -4918,7 +4955,8 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     }
     push(result);
     // This is matched by the call to [beginNode] in [enterFunction].
-    typeInferrer?.assignedVariables?.endNode(result, isClosure: true);
+    typeInferrer?.assignedVariables
+        ?.endNode(result, isClosureOrLateVariableInitializer: true);
   }
 
   @override
@@ -5007,7 +5045,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
 
     // This is matched by the call to [beginNode] in [handleForInLoopParts].
     AssignedVariablesNodeInfo<VariableDeclaration> assignedVariablesNodeInfo =
-        typeInferrer?.assignedVariables?.deferNode();
+        typeInferrer?.assignedVariables?.popNode();
 
     Expression iterable = popForValue();
     Object lvalue = pop(); // lvalue
@@ -5016,6 +5054,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     transformCollections = true;
     ForInElements elements =
         _computeForInElements(forToken, inToken, lvalue, null);
+    typeInferrer?.assignedVariables?.pushNode(assignedVariablesNodeInfo);
     VariableDeclaration variable = elements.variable;
     Expression problem = elements.expressionProblem;
     if (entry is MapEntry) {
@@ -5028,8 +5067,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
           entry,
           problem,
           isAsync: awaitToken != null);
-      typeInferrer?.assignedVariables
-          ?.storeInfo(result, assignedVariablesNodeInfo);
+      typeInferrer?.assignedVariables?.endNode(result);
       push(result);
     } else {
       ForInElement result = forest.createForInElement(
@@ -5041,8 +5079,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
           toValue(entry),
           problem,
           isAsync: awaitToken != null);
-      typeInferrer?.assignedVariables
-          ?.storeInfo(result, assignedVariablesNodeInfo);
+      typeInferrer?.assignedVariables?.endNode(result);
       push(result);
     }
   }

@@ -2,9 +2,16 @@
 
 ### Core libraries
 
+#### `dart:io`
+
+*   `HttpRequest` will now correctly follow HTTP 308 redirects
+    (`HttpStatus.permanentRedirect`).
+
 ### Dart VM
 
 ### Dart2JS
+
+* Removed `--no-defer-class-types` and `--no-new-deferred-split`.
 
 ### Tools
 
@@ -16,12 +23,35 @@
 
 #### Linter
 
-Updated the Linter to `0.1.119`, which includes:
+Updated the Linter to `0.1.121`, which includes:
 
+# 0.1.121
+
+* Performance improvements to `always_use_package_imports`, 
+  `avoid_renaming_method_parameters`, `prefer_relative_imports` and
+  `public_member_api_docs`.
+* (internal): updates to analyzer `0.40.4` APIs
+* New lint: `cast_nullable_to_non_nullable`.
+* New lint: `null_check_on_nullable_type_parameter`.
+* New lint: `tighten_type_of_initializing_formals`.
+* Updates to `public_member_apis` to check generic type aliases.
+* (Internal): updates to adopt new analyzer APIs.
 * Fixed `close_sinks` to handle `this`-prefixed property accesses.
 * New lint: `unnecessary_null_checks`.
 * Fixed `unawaited_futures` to handle `Future` subtypes.
 * New lint: `avoid_type_to_string`.
+
+## 2.10.1 - 2020-10-06
+
+This is a patch release that fixes the following issues:
+* crashes when developing Flutter applications (issue [#43464][]).
+* non-deterministic incorrect program behaviour and/or crashes (issue
+  [flutter/flutter#66672][]).
+* uncaught TypeErrors in DDC (issue [#43661][]).
+
+[#43464]: https://github.com/dart-lang/sdk/issues/43464
+[flutter/flutter#66672]: https://github.com/flutter/flutter/issues/66672
+[#43661]: https://github.com/dart-lang/sdk/issues/43661
 
 ## 2.10.0 - 2020-09-28
 
@@ -155,9 +185,14 @@ applications (issue [flutter/flutter#63038][]).
 *   [Abstract Unix Domain Socket][] is supported on Linux/Android now. Using an
     `InternetAddress` with `address` starting with '@' and type being
     `InternetAddressType.Unix` will create an abstract Unix Domain Socket.
+*   On Windows, file APIs can now handle files and directories identified by
+    long paths (greater than 260 characters). It complies with all restrictions
+    from [Long Path on Windows][]. Note that `Directory.current` does not work
+    with long path.
 
 [#42006]: https://github.com/dart-lang/sdk/issues/42006
 [Abstract Unix Domain Socket]: http://man7.org/linux/man-pages/man7/unix.7.html
+[Long Path on Windows]: https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file#maximum-path-length-limitation
 
 #### `dart:html`
 

@@ -590,6 +590,19 @@ class HintCode extends AnalyzerErrorCode {
       correction: "Try using a hide clause to hide '{0}'.");
 
   /**
+   * This hint is generated anywhere where an element annotated with `@internal`
+   * is exported indirectly as a part of a package's public API.
+   *
+   * Parameters:
+   * 0: the name of the element
+   */
+  static const HintCode INVALID_EXPORT_OF_INTERNAL_ELEMENT_INDIRECTLY = HintCode(
+      'INVALID_EXPORT_OF_INTERNAL_ELEMENT_INDIRECTLY',
+      "The member '{0}' can't be exported as a part of a package's public "
+          "API, but is indirectly exported as part of the signature of '{1}'.",
+      correction: "Try using a hide clause to hide '{0}'.");
+
+  /**
    * This hint is generated anywhere a @factory annotation is associated with
    * anything other than a method.
    */
@@ -2575,9 +2588,14 @@ class HintCode extends AnalyzerErrorCode {
    */
   // #### Description
   //
-  // The analyzer produces this diagnostic when a private class, enum, mixin,
-  // typedef, top level variable, top level function, or method is declared but
-  // never referenced.
+  // The analyzer produces this diagnostic when a private declaration isn't
+  // referenced in the library that contains the declaration. The following
+  // kinds of declarations are analyzed:
+  // - Private top-level declarations, such as classes, enums, mixins, typedefs,
+  //   top-level variables, and top-level functions
+  // - Private static and instance methods
+  // - Optional parameters of private functions for which a value is never
+  //   passed, even when the parameter doesn't have a private name
   //
   // #### Examples
   //
@@ -2588,11 +2606,30 @@ class HintCode extends AnalyzerErrorCode {
   // class [!_C!] {}
   // ```
   //
+  // Assuming that no code in the library passes a value for `y` in any
+  // invocation of `_m`, the following code produces this diagnostic:
+  //
+  // ```dart
+  // class C {
+  //   void _m(int x, [int [!y!]]) {}
+  //
+  //   void n() => _m(0);
+  // }
+  // ```
+  //
   // #### Common fixes
   //
-  // If the declaration isn't needed, then remove it.
+  // If the declaration isn't needed, then remove it:
   //
-  // If the declaration was intended to be used, then add the missing code.
+  // ```dart
+  // class C {
+  //   void _m(int x) {}
+  //
+  //   void n() => _m(0);
+  // }
+  // ```
+  //
+  // If the declaration is intended to be used, then add the code to use it.
   static const HintCode UNUSED_ELEMENT = HintCode(
       'UNUSED_ELEMENT', "The declaration '{0}' isn't referenced.",
       correction: "Try removing the declaration of '{0}'.",

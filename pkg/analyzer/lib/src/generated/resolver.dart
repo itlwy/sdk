@@ -377,8 +377,8 @@ class ResolverVisitor extends ScopedVisitor {
         reportConstEvaluationErrors: reportConstEvaluationErrors,
         migratableAstInfoProvider: _migratableAstInfoProvider);
     inferenceContext = InferenceContext._(this);
-    typeAnalyzer = StaticTypeAnalyzer(
-        this, featureSet, _flowAnalysis, migrationResolutionHooks);
+    typeAnalyzer =
+        StaticTypeAnalyzer(this, _flowAnalysis, migrationResolutionHooks);
   }
 
   /// Return the element representing the function containing the current node,
@@ -630,11 +630,21 @@ class ResolverVisitor extends ScopedVisitor {
       );
     } else if (node is SimpleIdentifier) {
       var resolver = PropertyElementResolver(this);
-      return resolver.resolveSimpleIdentifier(
+      var result = resolver.resolveSimpleIdentifier(
         node: node,
         hasRead: hasRead,
         hasWrite: true,
       );
+
+      if (hasRead && result.readElementRequested == null) {
+        errorReporter.reportErrorForNode(
+          CompileTimeErrorCode.UNDEFINED_IDENTIFIER,
+          node,
+          [node.name],
+        );
+      }
+
+      return result;
     } else {
       node.accept(this);
       return PropertyElementResolverResult();
@@ -658,6 +668,7 @@ class ResolverVisitor extends ScopedVisitor {
     if (left is IndexExpression) {
       if (hasRead) {
         left.staticElement = assignment.writeElement;
+        // ignore: deprecated_member_use_from_same_package
         left.auxiliaryElements = AuxiliaryElements(assignment.readElement);
       } else {
         left.staticElement = assignment.writeElement;
@@ -682,6 +693,7 @@ class ResolverVisitor extends ScopedVisitor {
     if (hasRead) {
       var readElement = assignment.readElement;
       if (readElement is PropertyAccessorElement) {
+        // ignore: deprecated_member_use_from_same_package
         leftIdentifier.auxiliaryElements = AuxiliaryElements(readElement);
       }
     }
@@ -1081,6 +1093,7 @@ class ResolverVisitor extends ScopedVisitor {
   void visitConditionalExpression(ConditionalExpression node) {
     Expression condition = node.condition;
     var flow = _flowAnalysis?.flow;
+    flow?.conditional_conditionBegin();
 
     // TODO(scheglov) Do we need these checks for null?
     condition?.accept(this);
@@ -1486,6 +1499,7 @@ class ResolverVisitor extends ScopedVisitor {
 
   @override
   void visitIfElement(IfElement node) {
+    _flowAnalysis?.flow?.ifStatement_conditionBegin();
     Expression condition = node.condition;
     InferenceContext.setType(condition, typeProvider.boolType);
     // TODO(scheglov) Do we need these checks for null?
@@ -1523,6 +1537,7 @@ class ResolverVisitor extends ScopedVisitor {
   @override
   void visitIfStatement(IfStatement node) {
     checkUnreachableNode(node);
+    _flowAnalysis?.flow?.ifStatement_conditionBegin();
 
     Expression condition = node.condition;
 
@@ -1992,12 +2007,17 @@ class ResolverVisitor extends ScopedVisitor {
     }
 
     var initializer = node.initializer;
-    var parent = node.parent;
-    TypeAnnotation declaredType = (parent as VariableDeclarationList).type;
-    if (declaredType == null && initializer != null) {
+    var parent = node.parent as VariableDeclarationList;
+    TypeAnnotation declaredType = parent.type;
+    if (initializer != null) {
       var initializerStaticType = initializer.staticType;
-      if (initializerStaticType is TypeParameterType) {
-        _flowAnalysis?.flow?.promote(declaredElement, initializerStaticType);
+      if (declaredType == null) {
+        if (initializerStaticType is TypeParameterType) {
+          _flowAnalysis?.flow?.promote(declaredElement, initializerStaticType);
+        }
+      } else if (!parent.isFinal) {
+        _flowAnalysis?.flow?.write(declaredElement, initializerStaticType,
+            viaInitializer: true);
       }
     }
   }

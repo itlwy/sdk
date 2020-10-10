@@ -22,6 +22,8 @@ import 'package:analyzer/src/generated/java_engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/source_io.dart';
+import 'package:analyzer/src/lint/linter.dart';
+import 'package:analyzer/src/lint/pub.dart';
 import 'package:analyzer/src/manifest/manifest_validator.dart';
 import 'package:analyzer/src/pubspec/pubspec_validator.dart';
 import 'package:analyzer/src/source/package_map_resolver.dart';
@@ -106,10 +108,9 @@ class ContextInfo {
   /// added to the context.
   Map<String, Source> sources = HashMap<String, Source>();
 
-  ContextInfo(ContextManagerImpl contextManager, this.parent, Folder folder,
+  ContextInfo(ContextManagerImpl contextManager, this.parent, this.folder,
       File packagespecFile, this.disposition)
-      : folder = folder,
-        pathFilter = PathFilter(
+      : pathFilter = PathFilter(
             folder.path, null, contextManager.resourceProvider.pathContext) {
     packageDescriptionPath = packagespecFile.path;
     parent.children.add(this);
@@ -806,6 +807,41 @@ class ContextManagerImpl implements ContextManager {
         var converter = AnalyzerConverter();
         convertedErrors = converter.convertAnalysisErrors(errors,
             lineInfo: lineInfo, options: driver.analysisOptions);
+
+        if (driver.analysisOptions.lint) {
+          var visitors = <LintRule, PubspecVisitor>{};
+          for (var linter in driver.analysisOptions.lintRules) {
+            if (linter is LintRule) {
+              var visitor = linter.getPubspecVisitor();
+              if (visitor != null) {
+                visitors[linter] = visitor;
+              }
+            }
+          }
+          // todo (pq): re-enable once `sort_pub_dependencies` is fixed
+          // see: https://github.com/dart-lang/linter/issues/2271
+          // see: See: https://github.com/dart-lang/sdk/issues/43529
+          //   if (visitors.isNotEmpty) {
+          //     var sourceUri = resourceProvider.pathContext.toUri(path);
+          //     var pubspecAst = Pubspec.parse(content,
+          //         sourceUrl: sourceUri, resourceProvider: resourceProvider);
+          //     var listener = RecordingErrorListener();
+          //     var reporter = ErrorReporter(listener,
+          //         resourceProvider.getFile(path).createSource(sourceUri),
+          //         isNonNullableByDefault: false);
+          //     for (var entry in visitors.entries) {
+          //       entry.key.reporter = reporter;
+          //       pubspecAst.accept(entry.value);
+          //     }
+          //     if (listener.errors.isNotEmpty) {
+          //       convertedErrors ??= <protocol.AnalysisError>[];
+          //       convertedErrors.addAll(converter.convertAnalysisErrors(
+          //           listener.errors,
+          //           lineInfo: lineInfo,
+          //           options: driver.analysisOptions));
+          //     }
+          //   }
+        }
       }
     } catch (exception) {
       // If the file cannot be analyzed, fall through to clear any previous

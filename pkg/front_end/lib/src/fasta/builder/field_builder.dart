@@ -231,9 +231,13 @@ class SourceFieldBuilder extends MemberBuilderImpl implements FieldBuilder {
   bool _typeEnsured = false;
   Set<ClassMember> _overrideDependencies;
 
-  void registerOverrideDependency(ClassMember overriddenMember) {
+  void registerOverrideDependency(Set<ClassMember> overriddenMembers) {
+    assert(
+        overriddenMembers.every((overriddenMember) =>
+            overriddenMember.classBuilder != classBuilder),
+        "Unexpected override dependencies for $this: $overriddenMembers");
     _overrideDependencies ??= {};
-    _overrideDependencies.add(overriddenMember);
+    _overrideDependencies.addAll(overriddenMembers);
   }
 
   void _ensureType(ClassHierarchyBuilder hierarchy) {
@@ -695,8 +699,8 @@ class SourceFieldMember extends BuilderClassMember {
   }
 
   @override
-  void registerOverrideDependency(ClassMember overriddenMember) {
-    memberBuilder.registerOverrideDependency(overriddenMember);
+  void registerOverrideDependency(Set<ClassMember> overriddenMembers) {
+    memberBuilder.registerOverrideDependency(overriddenMembers);
   }
 
   @override
@@ -713,6 +717,11 @@ class SourceFieldMember extends BuilderClassMember {
 
   @override
   bool get isFunction => false;
+
+  @override
+  bool isSameDeclaration(ClassMember other) {
+    return other is SourceFieldMember && memberBuilder == other.memberBuilder;
+  }
 }
 
 abstract class AbstractLateFieldEncoding implements FieldEncoding {
@@ -1057,13 +1066,16 @@ abstract class AbstractLateFieldEncoding implements FieldEncoding {
   @override
   List<ClassMember> getLocalMembers(SourceFieldBuilder fieldBuilder) {
     List<ClassMember> list = <ClassMember>[
-      new _SynthesizedFieldClassMember(fieldBuilder, field,
+      new _SynthesizedFieldClassMember(
+          fieldBuilder, field, _SynthesizedFieldMemberKind.LateField,
           isInternalImplementation: true),
       new _SynthesizedFieldClassMember(fieldBuilder, _lateGetter,
+          _SynthesizedFieldMemberKind.LateGetterSetter,
           isInternalImplementation: false)
     ];
     if (_lateIsSetField != null) {
-      list.add(new _SynthesizedFieldClassMember(fieldBuilder, _lateIsSetField,
+      list.add(new _SynthesizedFieldClassMember(
+          fieldBuilder, _lateIsSetField, _SynthesizedFieldMemberKind.LateIsSet,
           isInternalImplementation: true));
     }
     return list;
@@ -1071,13 +1083,19 @@ abstract class AbstractLateFieldEncoding implements FieldEncoding {
 
   @override
   List<ClassMember> getLocalSetters(SourceFieldBuilder fieldBuilder) {
-    List<ClassMember> list = <ClassMember>[];
+    List<ClassMember> list = <ClassMember>[
+      new _SynthesizedFieldClassMember(
+          fieldBuilder, field, _SynthesizedFieldMemberKind.LateField,
+          forSetter: true, isInternalImplementation: true),
+    ];
     if (_lateIsSetField != null) {
-      list.add(new _SynthesizedFieldClassMember(fieldBuilder, _lateIsSetField,
+      list.add(new _SynthesizedFieldClassMember(
+          fieldBuilder, _lateIsSetField, _SynthesizedFieldMemberKind.LateIsSet,
           forSetter: true, isInternalImplementation: true));
     }
     if (_lateSetter != null) {
       list.add(new _SynthesizedFieldClassMember(fieldBuilder, _lateSetter,
+          _SynthesizedFieldMemberKind.LateGetterSetter,
           forSetter: true, isInternalImplementation: false));
     }
     return list;
@@ -1274,6 +1292,7 @@ class LateFinalFieldWithInitializerEncoding extends AbstractLateFieldEncoding {
 
 class _SynthesizedFieldClassMember implements ClassMember {
   final SourceFieldBuilder fieldBuilder;
+  final _SynthesizedFieldMemberKind _kind;
 
   final Member _member;
 
@@ -1283,7 +1302,7 @@ class _SynthesizedFieldClassMember implements ClassMember {
   @override
   final bool isInternalImplementation;
 
-  _SynthesizedFieldClassMember(this.fieldBuilder, this._member,
+  _SynthesizedFieldClassMember(this.fieldBuilder, this._member, this._kind,
       {this.forSetter: false, this.isInternalImplementation})
       : assert(isInternalImplementation != null);
 
@@ -1298,8 +1317,8 @@ class _SynthesizedFieldClassMember implements ClassMember {
   }
 
   @override
-  void registerOverrideDependency(ClassMember overriddenMember) {
-    fieldBuilder.registerOverrideDependency(overriddenMember);
+  void registerOverrideDependency(Set<ClassMember> overriddenMembers) {
+    fieldBuilder.registerOverrideDependency(overriddenMembers);
   }
 
   @override
@@ -1415,8 +1434,16 @@ class _SynthesizedFieldClassMember implements ClassMember {
   }
 
   @override
-  String toString() =>
-      '_ClassMember($fieldBuilder,$_member,forSetter=${forSetter})';
+  bool isSameDeclaration(ClassMember other) {
+    if (identical(this, other)) return true;
+    return other is _SynthesizedFieldClassMember &&
+        fieldBuilder == other.fieldBuilder &&
+        _kind == other._kind;
+  }
+
+  @override
+  String toString() => '_SynthesizedFieldClassMember('
+      '$fieldBuilder,$_member,$_kind,forSetter=${forSetter})';
 }
 
 class AbstractOrExternalFieldEncoding implements FieldEncoding {
@@ -1584,6 +1611,7 @@ class AbstractOrExternalFieldEncoding implements FieldEncoding {
   List<ClassMember> getLocalMembers(SourceFieldBuilder fieldBuilder) =>
       <ClassMember>[
         new _SynthesizedFieldClassMember(fieldBuilder, _getter,
+            _SynthesizedFieldMemberKind.AbstractExternalGetterSetter,
             forSetter: false, isInternalImplementation: false)
       ];
 
@@ -1592,7 +1620,22 @@ class AbstractOrExternalFieldEncoding implements FieldEncoding {
       _setter != null
           ? <ClassMember>[
               new _SynthesizedFieldClassMember(fieldBuilder, _setter,
+                  _SynthesizedFieldMemberKind.AbstractExternalGetterSetter,
                   forSetter: true, isInternalImplementation: false)
             ]
           : const <ClassMember>[];
+}
+
+enum _SynthesizedFieldMemberKind {
+  /// A `isSet` field used for late lowering.
+  LateIsSet,
+
+  /// A field used for the value of a late lowered field.
+  LateField,
+
+  /// A getter or setter used for late lowering.
+  LateGetterSetter,
+
+  /// A getter or setter used for abstract or external fields.
+  AbstractExternalGetterSetter,
 }

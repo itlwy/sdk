@@ -25,6 +25,7 @@ import 'package:analysis_server/src/lsp/handlers/handler_states.dart';
 import 'package:analysis_server/src/lsp/handlers/handlers.dart';
 import 'package:analysis_server/src/lsp/mapping.dart';
 import 'package:analysis_server/src/lsp/notification_manager.dart';
+import 'package:analysis_server/src/lsp/progress.dart';
 import 'package:analysis_server/src/lsp/server_capabilities_computer.dart';
 import 'package:analysis_server/src/plugin/plugin_manager.dart';
 import 'package:analysis_server/src/protocol_server.dart' as protocol;
@@ -118,6 +119,9 @@ class LspAnalysisServer extends AbstractAnalysisServer {
   /// The set of analysis roots explicitly added to the workspace.
   final _explicitAnalysisRoots = HashSet<String>();
 
+  /// A progress reporter for analysis status.
+  ProgressReporter analyzingProgressReporter;
+
   /// Initialize a newly created server to send and receive messages to the
   /// given [channel].
   LspAnalysisServer(
@@ -151,6 +155,9 @@ class LspAnalysisServer extends AbstractAnalysisServer {
     channel.listen(handleMessage, onDone: done, onError: socketError);
     _pluginChangeSubscription =
         pluginManager.pluginsChanged.listen((_) => _onPluginsChanged());
+
+    analyzingProgressReporter =
+        ProgressReporter.serverCreated(this, analyzingProgressToken);
   }
 
   /// The capabilities of the LSP client. Will be null prior to initialization.
@@ -495,7 +502,8 @@ class LspAnalysisServer extends AbstractAnalysisServer {
     channel.sendNotification(notification);
   }
 
-  /// Send the given [request] to the client and wait for a response.
+  /// Send the given [request] to the client and wait for a response. Completes
+  /// with the raw [ResponseMessage] which could be an error response.
   Future<ResponseMessage> sendRequest(Method method, Object params) {
     final requestId = nextRequestId++;
     final completer = Completer<ResponseMessage>();
@@ -530,11 +538,23 @@ class LspAnalysisServer extends AbstractAnalysisServer {
   /// Send status notification to the client. The state of analysis is given by
   /// the [status] information.
   void sendStatusNotification(nd.AnalysisStatus status) {
-    channel.sendNotification(NotificationMessage(
-      method: CustomMethods.AnalyzerStatus,
-      params: AnalyzerStatusParams(isAnalyzing: status.isAnalyzing),
-      jsonrpc: jsonRpcVersion,
-    ));
+    // Send old custom notifications to clients that do not support $/progress.
+    // TODO(dantup): Remove this custom notification (and related classes) when
+    // it's unlikely to be in use by any clients.
+    if (clientCapabilities.window?.workDoneProgress != true) {
+      channel.sendNotification(NotificationMessage(
+        method: CustomMethods.AnalyzerStatus,
+        params: AnalyzerStatusParams(isAnalyzing: status.isAnalyzing),
+        jsonrpc: jsonRpcVersion,
+      ));
+      return;
+    }
+
+    if (status.isAnalyzing) {
+      analyzingProgressReporter.begin('Analyzing…');
+    } else {
+      analyzingProgressReporter.end();
+    }
   }
 
   /// Returns `true` if closing labels should be sent for [file] with the given

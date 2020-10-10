@@ -340,12 +340,7 @@ NameIndex TranslationHelper::EnclosingName(NameIndex name) {
 InstancePtr TranslationHelper::Canonicalize(const Instance& instance) {
   if (instance.IsNull()) return instance.raw();
 
-  const char* error_str = NULL;
-  InstancePtr result = instance.CheckAndCanonicalize(thread(), &error_str);
-  if (result == Object::null()) {
-    ReportError("Invalid const object %s", error_str);
-  }
-  return result;
+  return instance.Canonicalize(thread());
 }
 
 const String& TranslationHelper::DartString(const char* content,
@@ -2337,17 +2332,6 @@ void KernelReaderHelper::SkipExpression() {
       SkipExpression();              // read value.
       SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
-    case kDirectPropertyGet:
-      ReadPosition();                // read position.
-      SkipExpression();              // read receiver.
-      SkipInterfaceMemberNameReference();  // read target_reference.
-      return;
-    case kDirectPropertySet:
-      ReadPosition();                // read position.
-      SkipExpression();              // read receiver.
-      SkipInterfaceMemberNameReference();  // read target_reference.
-      SkipExpression();              // read value·
-      return;
     case kStaticGet:
       ReadPosition();                // read position.
       SkipCanonicalNameReference();  // read target_reference.
@@ -2369,12 +2353,6 @@ void KernelReaderHelper::SkipExpression() {
       SkipName();                    // read name.
       SkipArguments();               // read arguments.
       SkipInterfaceMemberNameReference();  // read interface_target_reference.
-      return;
-    case kDirectMethodInvocation:
-      ReadPosition();                // read position.
-      SkipExpression();              // read receiver.
-      SkipInterfaceMemberNameReference();  // read target_reference.
-      SkipArguments();               // read arguments.
       return;
     case kStaticInvocation:
       ReadPosition();                // read position.
@@ -3263,7 +3241,7 @@ const TypeArguments& TypeTranslator::BuildTypeArguments(intptr_t length) {
     }
 
     if (finalize_) {
-      type_arguments = type_arguments.Canonicalize();
+      type_arguments = type_arguments.Canonicalize(Thread::Current(), nullptr);
     }
   }
   return type_arguments;

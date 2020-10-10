@@ -272,25 +272,42 @@ void _writeConstructor(IndentableStringBuffer buffer, Interface interface) {
   buffer
     ..writeIndented('${interface.name}({')
     ..write(allFields.map((field) {
-      final annotation =
-          !field.allowsNull && !field.allowsUndefined ? '@required' : '';
-      return '$annotation this.${field.name}';
+      final isLiteral = field.type is LiteralType;
+      final isRequired =
+          !isLiteral && !field.allowsNull && !field.allowsUndefined;
+      final annotation = isRequired ? '@required' : '';
+      final valueCode =
+          isLiteral ? ' = ${(field.type as LiteralType).literal}' : '';
+      return '$annotation this.${field.name}$valueCode';
     }).join(', '))
     ..write('})');
-  final fieldsWithValidation =
-      allFields.where((f) => !f.allowsNull && !f.allowsUndefined).toList();
+  final fieldsWithValidation = allFields
+      .where(
+          (f) => (!f.allowsNull && !f.allowsUndefined) || f.type is LiteralType)
+      .toList();
   if (fieldsWithValidation.isNotEmpty) {
     buffer
       ..writeIndentedln(' {')
       ..indent();
     for (var field in fieldsWithValidation) {
-      buffer
-        ..writeIndentedln('if (${field.name} == null) {')
-        ..indent()
-        ..writeIndentedln(
-            "throw '${field.name} is required but was not provided';")
-        ..outdent()
-        ..writeIndentedln('}');
+      final type = field.type;
+      if (type is LiteralType) {
+        buffer
+          ..writeIndentedln('if (${field.name} != ${type.literal}) {')
+          ..indent()
+          ..writeIndentedln(
+              "throw '${field.name} may only be the literal ${type.literal.replaceAll("'", "\\'")}';")
+          ..outdent()
+          ..writeIndentedln('}');
+      } else if (!field.allowsNull && !field.allowsUndefined) {
+        buffer
+          ..writeIndentedln('if (${field.name} == null) {')
+          ..indent()
+          ..writeIndentedln(
+              "throw '${field.name} is required but was not provided';")
+          ..outdent()
+          ..writeIndentedln('}');
+      }
     }
     buffer
       ..outdent()
@@ -348,7 +365,7 @@ void _writeEnumClass(IndentableStringBuffer buffer, Namespace namespace) {
       ..writeIndentedln('switch (obj) {')
       ..indent();
     consts.forEach((cons) {
-      buffer..writeIndentedln('case ${cons.valueAsLiteral}:');
+      buffer.writeIndentedln('case ${cons.valueAsLiteral}:');
     });
     buffer
       ..indent()
@@ -363,9 +380,8 @@ void _writeEnumClass(IndentableStringBuffer buffer, Namespace namespace) {
     ..writeIndentedln('}');
   namespace.members.whereType<Const>().forEach((cons) {
     _writeDocCommentsAndAnnotations(buffer, cons);
-    buffer
-      ..writeIndentedln(
-          'static const ${_makeValidIdentifier(cons.name)} = ${namespace.name}$constructorName(${cons.valueAsLiteral});');
+    buffer.writeIndentedln(
+        'static const ${_makeValidIdentifier(cons.name)} = ${namespace.name}$constructorName(${cons.valueAsLiteral});');
   });
   buffer
     ..writeln()
@@ -641,7 +657,11 @@ void _writeJsonMapAssignment(
       ..writeIndentedln('if (${field.name} != null) {')
       ..indent();
   }
-  buffer..writeIndented('''$mapName['${field.name}'] = ${field.name}''');
+  // Suppress the ? operator if we've output a null check already.
+  final nullOp = shouldBeOmittedIfNoValue ? '' : '?';
+  final valueCode =
+      _isSpecType(field.type) ? '${field.name}$nullOp.toJson()' : field.name;
+  buffer.writeIndented('''$mapName['${field.name}'] = $valueCode''');
   if (!field.allowsUndefined && !field.allowsNull) {
     buffer.write(''' ?? (throw '${field.name} is required but was not set')''');
   }
@@ -771,7 +791,7 @@ void _writeTypeCheckCondition(IndentableStringBuffer buffer,
       buffer..write(' && (')..write('$valueCode.keys.every((item) => ');
       _writeTypeCheckCondition(
           buffer, interface, 'item', type.indexType, reporter);
-      buffer..write('&& $valueCode.values.every((item) => ');
+      buffer.write('&& $valueCode.values.every((item) => ');
       _writeTypeCheckCondition(
           buffer, interface, 'item', type.valueType, reporter);
       buffer.write(')))');

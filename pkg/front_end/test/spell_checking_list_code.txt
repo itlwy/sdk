@@ -82,6 +82,7 @@ b2i
 b2m
 b2n
 backping
+backstop
 badly
 bang
 bar
@@ -164,6 +165,7 @@ chars
 checkpoint
 chunks
 ci
+circuited
 ck
 cl
 claim
@@ -527,6 +529,7 @@ initializations
 initializer's
 insertion
 inspect
+inspecting
 inspection
 inspector
 inspired
@@ -553,6 +556,7 @@ iterables
 iterating
 iterations
 iterators
+ith
 j
 jacobr
 jakemac
@@ -756,6 +760,7 @@ overlap
 overloader
 overlooked
 overshadowed
+oversight
 overwrite
 overwriting
 ownership
@@ -849,6 +854,7 @@ r'\t
 r'\u
 r'\v
 r0i
+r0j
 r1i
 r2i
 ra
@@ -863,6 +869,8 @@ rb
 rc
 re
 reach
+reachabilities
+reachability
 react
 realign
 realise
@@ -895,6 +903,7 @@ reflect
 reflective
 reg
 regis
+registering
 rehash
 reindexed
 reissued
@@ -1035,6 +1044,7 @@ stdin
 stdio
 stdlib
 stdout
+sticky
 stmt
 str
 strategies
@@ -1203,6 +1213,8 @@ unreachable
 unseen
 unshadowed
 unsortable
+unsound
+unsoundness
 unwrapper
 unwraps
 unwritten
@@ -1303,6 +1315,7 @@ xdc
 xdfff
 xef
 xi
+xj
 xk
 xm
 xn
@@ -1322,6 +1335,7 @@ y`s
 yaml
 yb
 yet
+yi
 yielding
 yields
 yn

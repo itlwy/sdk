@@ -1558,6 +1558,12 @@ class KernelToElementMapImpl implements KernelToElementMap, IrToElementMap {
     ir.Node argument = node.arguments.positional.first;
     if (argument is ir.TypeLiteral && argument.type is ir.InterfaceType) {
       return getInterfaceType(argument.type);
+    } else if (argument is ir.ConstantExpression &&
+        argument.constant is ir.TypeLiteralConstant) {
+      ir.TypeLiteralConstant constant = argument.constant;
+      if (constant.type is ir.InterfaceType) {
+        return getInterfaceType(constant.type);
+      }
     }
     return null;
   }
@@ -1939,10 +1945,6 @@ class KernelBehaviorBuilder extends BehaviorBuilder {
 
   KernelBehaviorBuilder(this.elementEnvironment, this.commonElements,
       this.nativeBasicData, this.reporter, this.options);
-
-  @override
-  bool get trustJSInteropTypeAnnotations =>
-      options.trustJSInteropTypeAnnotations;
 }
 
 class KernelNativeMemberResolver implements NativeMemberResolver {

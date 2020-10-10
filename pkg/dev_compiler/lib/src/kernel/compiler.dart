@@ -560,7 +560,10 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
     var body = <js_ast.Statement>[];
     _emitSuperHelperSymbols(body);
-    var deferredSupertypes = <js_ast.Statement>[];
+    // Deferred supertypes must be evaluated lazily while emitting classes to
+    // prevent evaluating a JS expression for a deferred type from influencing
+    // class declaration order (such as when calling 'emitDeferredType').
+    var deferredSupertypes = <js_ast.Statement Function()>[];
 
     // Emit the class, e.g. `core.Object = class Object { ... }`
     _defineClass(c, className, jsMethods, body, deferredSupertypes);
@@ -591,11 +594,13 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
     var classDef = js_ast.Statement.from(body);
     var typeFormals = c.typeParameters;
+    var evaluatedDeferredSupertypes =
+        deferredSupertypes.map<js_ast.Statement>((f) => f()).toList();
     if (typeFormals.isNotEmpty) {
       classDef = _defineClassTypeArguments(
-          c, typeFormals, classDef, className, deferredSupertypes);
+          c, typeFormals, classDef, className, evaluatedDeferredSupertypes);
     } else {
-      afterClassDefItems.addAll(deferredSupertypes);
+      afterClassDefItems.addAll(evaluatedDeferredSupertypes);
     }
 
     body = [classDef];
@@ -745,7 +750,7 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
       js_ast.Expression className,
       List<js_ast.Method> methods,
       List<js_ast.Statement> body,
-      List<js_ast.Statement> deferredSupertypes) {
+      List<js_ast.Statement Function()> deferredSupertypes) {
     if (c == _coreTypes.objectClass) {
       body.add(_emitClassStatement(c, className, null, methods));
       return;
@@ -882,21 +887,20 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
     var savedTopLevelClass = _classEmittingExtends;
     _classEmittingExtends = c;
 
-    // Refers to 'S' in `class C extends S`. Set this to null to avoid
-    // referencing deferred supertypes in _emitClassConstructor's JS output.
-    js_ast.Expression baseClass;
-
+    // Unroll mixins.
     if (shouldDefer(supertype)) {
-      deferredSupertypes.add(runtimeStatement('setBaseClass(#, #)', [
-        getBaseClass(isMixinAliasClass(c) ? 0 : mixinApplications.length),
-        emitDeferredType(supertype),
-      ]));
-      // Refers to 'supertype' without any type arguments.
+      var originalSupertype = supertype;
+      deferredSupertypes.add(() => runtimeStatement('setBaseClass(#, #)', [
+            getBaseClass(isMixinAliasClass(c) ? 0 : mixinApplications.length),
+            emitDeferredType(originalSupertype),
+          ]));
+      // Refers to 'supertype' without type parameters. We remove these from
+      // the 'extends' clause for generics for cyclic dependencies and append
+      // them later with 'setBaseClass'.
       supertype =
           _coreTypes.rawType(supertype.classNode, _currentLibrary.nonNullable);
-    } else {
-      baseClass = emitClassRef(supertype);
     }
+    var baseClass = emitClassRef(supertype);
 
     if (isMixinAliasClass(c)) {
       // Given `class C = Object with M [implements I1, I2 ...];`
@@ -908,12 +912,16 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
       var m = c.mixedInType.asInterfaceType;
       var deferMixin = shouldDefer(m);
-      var mixinBody = deferMixin ? deferredSupertypes : body;
       var mixinClass = deferMixin ? emitDeferredType(m) : emitClassRef(m);
       var classExpr = deferMixin ? getBaseClass(0) : className;
 
-      mixinBody
-          .add(runtimeStatement('applyMixin(#, #)', [classExpr, mixinClass]));
+      var mixinApplication =
+          runtimeStatement('applyMixin(#, #)', [classExpr, mixinClass]);
+      if (deferMixin) {
+        deferredSupertypes.add(() => mixinApplication);
+      } else {
+        body.add(mixinApplication);
+      }
 
       if (methods.isNotEmpty) {
         // However we may need to add some methods to this class that call
@@ -922,11 +930,16 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
         // We do this with the following pattern:
         //
         //     applyMixin(C, class C$ extends M { <methods>  });
-        mixinBody.add(runtimeStatement('applyMixin(#, #)', [
+        var mixinApplicationWithMethods = runtimeStatement('applyMixin(#, #)', [
           classExpr,
           js_ast.ClassExpression(
               _emitTemporaryId(getLocalClassName(c)), mixinClass, methods)
-        ]));
+        ]);
+        if (deferMixin) {
+          deferredSupertypes.add(() => mixinApplicationWithMethods);
+        } else {
+          body.add(mixinApplicationWithMethods);
+        }
       }
 
       emitMixinConstructors(className, m);
@@ -969,10 +982,10 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
       hasUnnamedSuper = hasUnnamedSuper || _hasUnnamedConstructor(mixinClass);
 
       if (shouldDefer(mixinType)) {
-        deferredSupertypes.add(runtimeStatement('applyMixin(#, #)', [
-          getBaseClass(mixinApplications.length - i),
-          emitDeferredType(mixinType)
-        ]));
+        deferredSupertypes.add(() => runtimeStatement('applyMixin(#, #)', [
+              getBaseClass(mixinApplications.length - i),
+              emitDeferredType(mixinType)
+            ]));
       } else {
         body.add(runtimeStatement(
             'applyMixin(#, #)', [mixinId, emitClassRef(mixinType)]));
@@ -3429,9 +3442,9 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
         return js.call(code, [_visitTest(node.left), _visitTest(node.right)]);
       }
 
-      var op = node.operator;
-      if (op == '&&') return shortCircuit('# && #');
-      if (op == '||') return shortCircuit('# || #');
+      var op = node.operatorEnum;
+      if (op == LogicalExpressionOperator.AND) return shortCircuit('# && #');
+      if (op == LogicalExpressionOperator.OR) return shortCircuit('# || #');
     }
 
     if (node is AsExpression && node.isTypeError) {
@@ -4200,24 +4213,20 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
   @override
   js_ast.Expression visitPropertyGet(PropertyGet node) {
-    return _emitPropertyGet(
-        node.receiver, node.interfaceTarget, node.name.text);
+    var propertyGet =
+        _emitPropertyGet(node.receiver, node.interfaceTarget, node.name.text);
+    if (_isCheckableNative(node.interfaceTarget)) {
+      // If target is a native getter with a non-nullable type, add a null check
+      // for soundness.
+      return runtimeCall('checkNativeNonNull(#)', [propertyGet]);
+    }
+    return propertyGet;
   }
 
   @override
   js_ast.Expression visitPropertySet(PropertySet node) {
     return _emitPropertySet(
         node.receiver, node.interfaceTarget, node.value, node.name.text);
-  }
-
-  @override
-  js_ast.Expression visitDirectPropertyGet(DirectPropertyGet node) {
-    return _emitPropertyGet(node.receiver, node.target);
-  }
-
-  @override
-  js_ast.Expression visitDirectPropertySet(DirectPropertySet node) {
-    return _emitPropertySet(node.receiver, node.target, node.value);
   }
 
   js_ast.Expression _emitPropertyGet(Expression receiver, Member member,
@@ -4263,6 +4272,16 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
       return js_ast.PropertyAccess(jsReceiver, jsName);
     }
   }
+
+  /// Return whether [member] returns a native object whose type needs to be
+  /// checked.
+  bool _isCheckableNative(Member member) =>
+      member != null &&
+      member.isExternal &&
+      _extensionTypes.isNativeClass(member.enclosingClass) &&
+      member is Procedure &&
+      member.function != null &&
+      member.function.returnType.isPotentiallyNonNullable;
 
   // TODO(jmesserly): can we encapsulate REPL name lookups and remove this?
   // _emitMemberName would be a nice place to handle it, but we don't have
@@ -4334,13 +4353,14 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
   @override
   js_ast.Expression visitMethodInvocation(MethodInvocation node) {
-    return _emitMethodCall(
+    var methodCall = _emitMethodCall(
         node.receiver, node.interfaceTarget, node.arguments, node);
-  }
-
-  @override
-  js_ast.Expression visitDirectMethodInvocation(DirectMethodInvocation node) {
-    return _emitMethodCall(node.receiver, node.target, node.arguments, node);
+    if (_isCheckableNative(node.interfaceTarget)) {
+      // If target is a native method with a non-nullable type, add a null check
+      // for soundness.
+      return runtimeCall('checkNativeNonNull(#)', [methodCall]);
+    }
+    return methodCall;
   }
 
   js_ast.Expression _emitMethodCall(Expression receiver, Member target,
@@ -5066,10 +5086,29 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
     var result = js.parseForeignJS(source).instantiate(jsArgs);
 
+    // Add a check to make sure any JS() values from a native type are typed
+    // properly.
+    if (_isWebLibrary(_currentLibrary.importUri)) {
+      var type = node.getStaticType(_staticTypeContext);
+      if (type.isPotentiallyNonNullable) {
+        result = runtimeCall('checkNativeNonNull(#)', [result]);
+      }
+    }
+
     assert(result is js_ast.Expression ||
         result is js_ast.Statement && node.parent is ExpressionStatement);
-    return result;
+    return result.withSourceInformation(_nodeStart(node));
   }
+
+  bool _isWebLibrary(Uri importUri) =>
+      importUri.scheme == 'dart' &&
+      (importUri.path == 'html' ||
+          importUri.path == 'svg' ||
+          importUri.path == 'indexed_db' ||
+          importUri.path == 'web_audio' ||
+          importUri.path == 'web_gl' ||
+          importUri.path == 'web_sql' ||
+          importUri.path == 'html_common');
 
   bool _isNull(Expression expr) =>
       expr is NullLiteral ||
@@ -5243,10 +5282,6 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
     if (operand is MethodInvocation && operand.name.text == '==') {
       return _emitEqualityOperator(operand.receiver, operand.interfaceTarget,
           operand.arguments.positional[0],
-          negated: true);
-    } else if (operand is DirectMethodInvocation && operand.name.text == '==') {
-      return _emitEqualityOperator(
-          operand.receiver, operand.target, operand.arguments.positional[0],
           negated: true);
     } else if (operand is StaticInvocation &&
         operand.target == _coreTypes.identicalProcedure) {

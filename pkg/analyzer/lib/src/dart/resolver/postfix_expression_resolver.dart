@@ -17,7 +17,6 @@ import 'package:analyzer/src/dart/resolver/invocation_inference_helper.dart';
 import 'package:analyzer/src/dart/resolver/type_property_resolver.dart';
 import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/generated/resolver.dart';
-import 'package:analyzer/src/task/strong/checker.dart';
 import 'package:meta/meta.dart';
 
 /// Helper for resolving [PostfixExpression]s.
@@ -63,6 +62,8 @@ class PostfixExpressionResolver {
     var operand = node.operand;
     _resolver.setReadElement(operand, readElement);
     _resolver.setWriteElement(operand, writeElement);
+    _resolver.migrationResolutionHooks
+        ?.setCompoundAssignmentExpressionTypes(node);
 
     _resolver.setAssignmentBackwardCompatibility(
       assignment: node,
@@ -83,8 +84,8 @@ class PostfixExpressionResolver {
   ///
   /// TODO(scheglov) this is duplicate
   void _checkForInvalidAssignmentIncDec(
-      AstNode node, Expression operand, DartType type) {
-    var operandWriteType = _getWriteType(operand);
+      PostfixExpression node, Expression operand, DartType type) {
+    var operandWriteType = node.writeType;
     if (!_typeSystem.isAssignableTo2(type, operandWriteType)) {
       _resolver.errorReporter.reportErrorForNode(
         CompileTimeErrorCode.INVALID_ASSIGNMENT,
@@ -128,16 +129,6 @@ class PostfixExpressionResolver {
       throw UnsupportedError(
           'Unsupported postfix operator ${expression.operator.lexeme}');
     }
-  }
-
-  DartType _getWriteType(Expression node) {
-    if (node is SimpleIdentifier) {
-      var element = node.staticElement;
-      if (element is PromotableElement) {
-        return element.type;
-      }
-    }
-    return node.staticType;
   }
 
   void _resolve1(PostfixExpression node, DartType receiverType) {
@@ -228,11 +219,12 @@ class PostfixExpressionResolver {
     operand.accept(_resolver);
     operand = node.operand;
 
-    var operandType = getReadType(operand);
+    var operandType = operand.staticType;
 
     var type = _typeSystem.promoteToNonNull(operandType);
     _inferenceHelper.recordStaticType(node, type);
 
+    _resolver.nullShortingTermination(node);
     _flowAnalysis?.flow?.nonNullAssert_end(operand);
   }
 }

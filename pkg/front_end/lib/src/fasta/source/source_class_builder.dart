@@ -492,61 +492,8 @@ class SourceClassBuilder extends ClassBuilderImpl
   }
 
   void checkTypesInOutline(TypeEnvironment typeEnvironment) {
-    SourceLibraryBuilder libraryBuilder = this.library;
-    Library library = libraryBuilder.library;
-    final DartType bottomType = library.isNonNullableByDefault
-        ? const NeverType(Nullability.nonNullable)
-        : typeEnvironment.nullType;
-
-    // Check in bounds of own type variables.
-    for (TypeParameter parameter in cls.typeParameters) {
-      Set<TypeArgumentIssue> issues = {};
-      issues.addAll(findTypeArgumentIssues(
-              library,
-              parameter.bound,
-              typeEnvironment,
-              SubtypeCheckMode.ignoringNullabilities,
-              bottomType,
-              allowSuperBounded: true) ??
-          const []);
-      if (library.isNonNullableByDefault) {
-        issues.addAll(findTypeArgumentIssues(library, parameter.bound,
-                typeEnvironment, SubtypeCheckMode.withNullabilities, bottomType,
-                allowSuperBounded: true) ??
-            const []);
-      }
-      for (TypeArgumentIssue issue in issues) {
-        DartType argument = issue.argument;
-        TypeParameter typeParameter = issue.typeParameter;
-        if (libraryBuilder.inferredTypes.contains(argument)) {
-          // Inference in type expressions in the supertypes boils down to
-          // instantiate-to-bound which shouldn't produce anything that breaks
-          // the bounds after the non-simplicity checks are done.  So, any
-          // violation here is the result of non-simple bounds, and the error
-          // is reported elsewhere.
-          continue;
-        }
-
-        if (argument is FunctionType && argument.typeParameters.length > 0) {
-          libraryBuilder.reportTypeArgumentIssue(
-              messageGenericFunctionTypeUsedAsActualTypeArgument,
-              fileUri,
-              parameter.fileOffset,
-              null);
-        } else {
-          libraryBuilder.reportTypeArgumentIssue(
-              templateIncorrectTypeArgument.withArguments(
-                  argument,
-                  typeParameter.bound,
-                  typeParameter.name,
-                  getGenericTypeName(issue.enclosingType),
-                  library.isNonNullableByDefault),
-              fileUri,
-              parameter.fileOffset,
-              typeParameter);
-        }
-      }
-    }
+    library.checkBoundsInTypeParameters(
+        typeEnvironment, cls.typeParameters, fileUri);
 
     // Check in supers.
     if (cls.supertype != null) {
@@ -561,72 +508,47 @@ class SourceClassBuilder extends ClassBuilderImpl
       }
     }
 
-    // Check in members.
-    for (Procedure procedure in cls.procedures) {
-      checkVarianceInFunction(procedure, typeEnvironment, cls.typeParameters);
-      libraryBuilder.checkBoundsInFunctionNode(
-          procedure.function, typeEnvironment, fileUri);
-    }
-    for (Constructor constructor in cls.constructors) {
-      libraryBuilder.checkBoundsInFunctionNode(
-          constructor.function, typeEnvironment, fileUri);
-    }
-    for (RedirectingFactoryConstructor redirecting
-        in cls.redirectingFactoryConstructors) {
-      libraryBuilder.checkBoundsInFunctionNodeParts(
-          typeEnvironment, fileUri, redirecting.fileOffset,
-          typeParameters: redirecting.typeParameters,
-          positionalParameters: redirecting.positionalParameters,
-          namedParameters: redirecting.namedParameters);
-    }
-
     forEach((String name, Builder builder) {
-      // Check fields.
       if (builder is SourceFieldBuilder) {
+        // Check fields.
         checkVarianceInField(builder, typeEnvironment, cls.typeParameters);
-        libraryBuilder.checkTypesInField(builder, typeEnvironment);
-      }
-
-      // Check initializers.
-      if (builder is FunctionBuilder &&
-          !(builder.isAbstract || builder.isExternal) &&
-          builder.formals != null) {
-        libraryBuilder.checkInitializersInFormals(
-            builder.formals, typeEnvironment);
+        library.checkTypesInField(builder, typeEnvironment);
+      } else if (builder is ProcedureBuilder) {
+        // Check procedures
+        checkVarianceInFunction(
+            builder.procedure, typeEnvironment, cls.typeParameters);
+        library.checkTypesInProcedureBuilder(builder, typeEnvironment);
+      } else {
+        assert(builder is DillMemberBuilder && builder.name == redirectingName,
+            "Unexpected member: $builder.");
       }
     });
 
-    constructors.local.forEach((String name, MemberBuilder builder) {
+    forEachConstructor((String name, MemberBuilder builder) {
       if (builder is ConstructorBuilder) {
-        if (!builder.isExternal && builder.formals != null) {
-          libraryBuilder.checkInitializersInFormals(
-              builder.formals, typeEnvironment);
-        }
+        library.checkTypesInConstructorBuilder(builder, typeEnvironment);
       } else if (builder is RedirectingFactoryBuilder) {
-        // Default values are not required on redirecting factory constructors.
+        library.checkTypesInRedirectingFactoryBuilder(builder, typeEnvironment);
       } else if (builder is ProcedureBuilder) {
         assert(builder.isFactory, "Unexpected constructor $builder.");
-        if (!builder.isExternal && builder.formals != null) {
-          libraryBuilder.checkInitializersInFormals(
-              builder.formals, typeEnvironment);
-        }
+        library.checkTypesInProcedureBuilder(builder, typeEnvironment);
       } else {
         assert(
             // This is a synthesized constructor.
             builder is DillMemberBuilder && builder.member is Constructor,
-            "Unexpected constructor $builder.");
+            "Unexpected constructor: $builder.");
       }
-    });
+    }, includeInjectedConstructors: true);
   }
 
-  void addSyntheticConstructor(Constructor constructor) {
-    String name = constructor.name.text;
-    cls.constructors.add(constructor);
-    constructor.parent = cls;
-    DillMemberBuilder memberBuilder = new DillMemberBuilder(constructor, this);
-    memberBuilder.next = constructorScopeBuilder[name];
-    constructorScopeBuilder.addMember(name, memberBuilder);
-    if (constructor.isConst) {
+  void addSyntheticConstructor(SyntheticConstructorBuilder constructorBuilder) {
+    String name = constructorBuilder.name;
+    constructorBuilder.next = constructorScopeBuilder[name];
+    constructorScopeBuilder.addMember(name, constructorBuilder);
+    // Synthetic constructors are created after the component has been built
+    // so we need to add the constructor to the class.
+    cls.addMember(constructorBuilder.member);
+    if (constructorBuilder.isConst) {
       cls.hasConstConstructor = true;
     }
   }
@@ -1202,6 +1124,154 @@ class SourceClassBuilder extends ClassBuilderImpl
       }
     }
     // TODO(ahe): Handle other cases: accessors, operators, and fields.
+  }
+
+  void checkGetterSetter(Types types, Member getter, Member setter) {
+    if (getter == setter) {
+      return;
+    }
+    if (cls != getter.enclosingClass &&
+        getter.enclosingClass == setter.enclosingClass) {
+      return;
+    }
+
+    DartType getterType = getter.getterType;
+    if (getter.enclosingClass.typeParameters.isNotEmpty) {
+      getterType = Substitution.fromPairs(
+              getter.enclosingClass.typeParameters,
+              types.hierarchy.getTypeArgumentsAsInstanceOf(
+                  thisType, getter.enclosingClass))
+          .substituteType(getterType);
+    }
+
+    DartType setterType = setter.setterType;
+    if (setter.enclosingClass.typeParameters.isNotEmpty) {
+      setterType = Substitution.fromPairs(
+              setter.enclosingClass.typeParameters,
+              types.hierarchy.getTypeArgumentsAsInstanceOf(
+                  thisType, setter.enclosingClass))
+          .substituteType(setterType);
+    }
+
+    if (getterType is InvalidType || setterType is InvalidType) {
+      // Don't report a problem as something else is wrong that has already
+      // been reported.
+    } else {
+      bool isValid = types.isSubtypeOf(
+          getterType,
+          setterType,
+          library.isNonNullableByDefault
+              ? SubtypeCheckMode.withNullabilities
+              : SubtypeCheckMode.ignoringNullabilities);
+      if (!isValid && !library.isNonNullableByDefault) {
+        // Allow assignability in legacy libraries.
+        isValid = types.isSubtypeOf(
+            setterType, getterType, SubtypeCheckMode.ignoringNullabilities);
+      }
+      if (!isValid) {
+        Member getterOrigin = getter.memberSignatureOrigin ?? getter;
+        Member setterOrigin = setter.memberSignatureOrigin ?? setter;
+        String getterMemberName = '${getterOrigin.enclosingClass.name}'
+            '.${getterOrigin.name.text}';
+        String setterMemberName = '${setterOrigin.enclosingClass.name}'
+            '.${setterOrigin.name.text}';
+        if (getterOrigin.enclosingClass == cls &&
+            setterOrigin.enclosingClass == cls) {
+          Template<Message Function(DartType, String, DartType, String, bool)>
+              template = library.isNonNullableByDefault
+                  ? templateInvalidGetterSetterType
+                  : templateInvalidGetterSetterTypeLegacy;
+          library.addProblem(
+              template.withArguments(getterType, getterMemberName, setterType,
+                  setterMemberName, library.isNonNullableByDefault),
+              getterOrigin.fileOffset,
+              getterOrigin.name.text.length,
+              getterOrigin.fileUri,
+              context: [
+                templateInvalidGetterSetterTypeSetterContext
+                    .withArguments(setterMemberName)
+                    .withLocation(setterOrigin.fileUri, setterOrigin.fileOffset,
+                        setterOrigin.name.text.length)
+              ]);
+        } else if (getterOrigin.enclosingClass == cls) {
+          Template<Message Function(DartType, String, DartType, String, bool)>
+              template = library.isNonNullableByDefault
+                  ? templateInvalidGetterSetterTypeSetterInheritedGetter
+                  : templateInvalidGetterSetterTypeSetterInheritedGetterLegacy;
+          if (getterOrigin is Field) {
+            template = library.isNonNullableByDefault
+                ? templateInvalidGetterSetterTypeSetterInheritedField
+                : templateInvalidGetterSetterTypeSetterInheritedFieldLegacy;
+          }
+          library.addProblem(
+              template.withArguments(getterType, getterMemberName, setterType,
+                  setterMemberName, library.isNonNullableByDefault),
+              getterOrigin.fileOffset,
+              getterOrigin.name.text.length,
+              getterOrigin.fileUri,
+              context: [
+                templateInvalidGetterSetterTypeSetterContext
+                    .withArguments(setterMemberName)
+                    .withLocation(setterOrigin.fileUri, setterOrigin.fileOffset,
+                        setterOrigin.name.text.length)
+              ]);
+        } else if (setterOrigin.enclosingClass == cls) {
+          Template<Message Function(DartType, String, DartType, String, bool)>
+              template = library.isNonNullableByDefault
+                  ? templateInvalidGetterSetterTypeGetterInherited
+                  : templateInvalidGetterSetterTypeGetterInheritedLegacy;
+          Template<Message Function(String)> context =
+              templateInvalidGetterSetterTypeGetterContext;
+          if (getterOrigin is Field) {
+            template = library.isNonNullableByDefault
+                ? templateInvalidGetterSetterTypeFieldInherited
+                : templateInvalidGetterSetterTypeFieldInheritedLegacy;
+            context = templateInvalidGetterSetterTypeFieldContext;
+          }
+          library.addProblem(
+              template.withArguments(getterType, getterMemberName, setterType,
+                  setterMemberName, library.isNonNullableByDefault),
+              setterOrigin.fileOffset,
+              setterOrigin.name.text.length,
+              setterOrigin.fileUri,
+              context: [
+                context.withArguments(getterMemberName).withLocation(
+                    getterOrigin.fileUri,
+                    getterOrigin.fileOffset,
+                    getterOrigin.name.text.length)
+              ]);
+        } else {
+          Template<Message Function(DartType, String, DartType, String, bool)>
+              template = library.isNonNullableByDefault
+                  ? templateInvalidGetterSetterTypeBothInheritedGetter
+                  : templateInvalidGetterSetterTypeBothInheritedGetterLegacy;
+          Template<Message Function(String)> context =
+              templateInvalidGetterSetterTypeGetterContext;
+          if (getterOrigin is Field) {
+            template = library.isNonNullableByDefault
+                ? templateInvalidGetterSetterTypeBothInheritedField
+                : templateInvalidGetterSetterTypeBothInheritedFieldLegacy;
+            context = templateInvalidGetterSetterTypeFieldContext;
+          }
+          library.addProblem(
+              template.withArguments(getterType, getterMemberName, setterType,
+                  setterMemberName, library.isNonNullableByDefault),
+              charOffset,
+              noLength,
+              fileUri,
+              context: [
+                context.withArguments(getterMemberName).withLocation(
+                    getterOrigin.fileUri,
+                    getterOrigin.fileOffset,
+                    getterOrigin.name.text.length),
+                templateInvalidGetterSetterTypeSetterContext
+                    .withArguments(setterMemberName)
+                    .withLocation(setterOrigin.fileUri, setterOrigin.fileOffset,
+                        setterOrigin.name.text.length)
+              ]);
+        }
+      }
+    }
   }
 
   Uri _getMemberUri(Member member) {

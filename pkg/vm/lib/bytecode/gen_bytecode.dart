@@ -1635,8 +1635,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
     if (condition is Not) {
       _genConditionAndJumpIf(condition.operand, !value, dest);
     } else if (condition is LogicalExpression) {
-      assert(condition.operator == '||' || condition.operator == '&&');
-      final isOR = (condition.operator == '||');
+      final isOR = (condition.operatorEnum == LogicalExpressionOperator.OR);
 
       Label shortCircuit, done;
       if (isOR == value) {
@@ -2929,8 +2928,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
       (expr is VariableSet ||
           expr is PropertySet ||
           expr is StaticSet ||
-          expr is SuperPropertySet ||
-          expr is DirectPropertySet);
+          expr is SuperPropertySet);
 
   void _createArgumentsArray(int temp, List<DartType> typeArgs,
       List<Expression> args, bool storeLastArgumentToTemp) {
@@ -3076,55 +3074,6 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
   }
 
   @override
-  visitDirectMethodInvocation(DirectMethodInvocation node) {
-    final args = node.arguments;
-    _genArguments(node.receiver, args);
-    final target = node.target;
-    if (target is Procedure && !target.isGetter && !target.isSetter) {
-      _genDirectCallWithArgs(target, args, hasReceiver: true, node: node);
-    } else {
-      throw new UnsupportedOperationError(
-          'Unsupported DirectMethodInvocation with target ${target.runtimeType} $target');
-    }
-  }
-
-  @override
-  visitDirectPropertyGet(DirectPropertyGet node) {
-    _generateNode(node.receiver);
-    final target = node.target;
-    if (target is Field || (target is Procedure && target.isGetter)) {
-      _genDirectCall(target, objectTable.getArgDescHandle(1), 1,
-          isGet: true, node: node);
-    } else {
-      throw new UnsupportedOperationError(
-          'Unsupported DirectPropertyGet with ${target.runtimeType} $target');
-    }
-  }
-
-  @override
-  visitDirectPropertySet(DirectPropertySet node) {
-    final int temp = locals.tempIndexInFrame(node);
-    final bool hasResult = !isExpressionWithoutResult(node);
-
-    _generateNode(node.receiver);
-    _generateNode(node.value);
-
-    if (hasResult) {
-      asm.emitStoreLocal(temp);
-    }
-
-    final target = node.target;
-    assert(target is Field || (target is Procedure && target.isSetter));
-    _genDirectCall(target, objectTable.getArgDescHandle(2), 2,
-        isSet: true, node: node);
-    asm.emitDrop1();
-
-    if (hasResult) {
-      asm.emitPush(temp);
-    }
-  }
-
-  @override
   visitFunctionExpression(FunctionExpression node) {
     _genClosure(node, '<anonymous closure>', node.function);
   }
@@ -3221,12 +3170,10 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
 
   @override
   visitLogicalExpression(LogicalExpression node) {
-    assert(node.operator == '||' || node.operator == '&&');
-
     final Label shortCircuit = new Label();
     final Label done = new Label();
     final int temp = locals.tempIndexInFrame(node);
-    final isOR = (node.operator == '||');
+    final isOR = (node.operatorEnum == LogicalExpressionOperator.OR);
 
     _genConditionAndJumpIf(node.left, isOR, shortCircuit);
 

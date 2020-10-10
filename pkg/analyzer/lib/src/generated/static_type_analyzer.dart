@@ -2,7 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
@@ -16,8 +15,6 @@ import 'package:analyzer/src/dart/element/type_system.dart';
 import 'package:analyzer/src/dart/resolver/flow_analysis_visitor.dart';
 import 'package:analyzer/src/generated/migration.dart';
 import 'package:analyzer/src/generated/resolver.dart';
-import 'package:analyzer/src/task/strong/checker.dart'
-    show getExpressionType, getReadType;
 
 /// Instances of the class `StaticTypeAnalyzer` perform two type-related tasks. First, they
 /// compute the static type of every expression. Second, they look for any static type errors or
@@ -29,9 +26,6 @@ import 'package:analyzer/src/task/strong/checker.dart'
 class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// The resolver driving the resolution and type analysis.
   final ResolverVisitor _resolver;
-
-  /// The feature set that should be used to resolve types.
-  final FeatureSet _featureSet;
 
   final MigrationResolutionHooks _migrationResolutionHooks;
 
@@ -50,16 +44,12 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// [_resolver] based on the
   ///
   /// @param resolver the resolver driving this participant
-  StaticTypeAnalyzer(this._resolver, this._featureSet, this._flowAnalysis,
-      this._migrationResolutionHooks) {
+  StaticTypeAnalyzer(
+      this._resolver, this._flowAnalysis, this._migrationResolutionHooks) {
     _typeProvider = _resolver.typeProvider;
     _typeSystem = _resolver.typeSystem;
     _dynamicType = _typeProvider.dynamicType;
   }
-
-  /// Is `true` if the library being analyzed is non-nullable by default.
-  bool get _isNonNullableByDefault =>
-      _featureSet.isEnabled(Feature.non_nullable);
 
   /// Given a constructor for a generic type, returns the equivalent generic
   /// function type that we could use to forward to the constructor, or for a
@@ -113,7 +103,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// `String`.</blockquote>
   @override
   void visitAdjacentStrings(AdjacentStrings node) {
-    recordStaticType(node, _nonNullable(_typeProvider.stringType));
+    recordStaticType(node, _typeProvider.stringType);
   }
 
   /// The Dart Language Specification, 12.32: <blockquote>... the cast expression <i>e as T</i> ...
@@ -133,7 +123,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   ///   the static type of e.
   @override
   void visitAwaitExpression(AwaitExpression node) {
-    DartType resultType = _getStaticType(node.expression);
+    DartType resultType = node.expression.staticType;
     if (resultType != null) resultType = _typeSystem.flatten(resultType);
     recordStaticType(node, resultType);
   }
@@ -142,7 +132,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// bool.</blockquote>
   @override
   void visitBooleanLiteral(BooleanLiteral node) {
-    recordStaticType(node, _nonNullable(_typeProvider.boolType));
+    recordStaticType(node, _typeProvider.boolType);
   }
 
   /// The Dart Language Specification, 12.15.2: <blockquote>A cascaded method invocation expression
@@ -150,7 +140,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// t;}(e)</i>.</blockquote>
   @override
   void visitCascadeExpression(CascadeExpression node) {
-    recordStaticType(node, _getStaticType(node.target));
+    recordStaticType(node, node.target.staticType);
   }
 
   /// The Dart Language Specification, 12.19: <blockquote> ... a conditional expression <i>c</i> of
@@ -169,7 +159,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// double.</blockquote>
   @override
   void visitDoubleLiteral(DoubleLiteral node) {
-    recordStaticType(node, _nonNullable(_typeProvider.doubleType));
+    recordStaticType(node, _typeProvider.doubleType);
   }
 
   @override
@@ -244,9 +234,9 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
     if (context == null ||
         _typeSystem.isAssignableTo2(_typeProvider.intType, context) ||
         !_typeSystem.isAssignableTo2(_typeProvider.doubleType, context)) {
-      recordStaticType(node, _nonNullable(_typeProvider.intType));
+      recordStaticType(node, _typeProvider.intType);
     } else {
-      recordStaticType(node, _nonNullable(_typeProvider.doubleType));
+      recordStaticType(node, _typeProvider.doubleType);
     }
   }
 
@@ -256,7 +246,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// The static type of an is-expression is `bool`.</blockquote>
   @override
   void visitIsExpression(IsExpression node) {
-    recordStaticType(node, _nonNullable(_typeProvider.boolType));
+    recordStaticType(node, _typeProvider.boolType);
   }
 
   @override
@@ -267,7 +257,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   @override
   void visitNamedExpression(NamedExpression node) {
     Expression expression = node.expression;
-    recordStaticType(node, _getStaticType(expression));
+    recordStaticType(node, expression.staticType);
   }
 
   /// The Dart Language Specification, 12.2: <blockquote>The static type of `null` is bottom.
@@ -280,7 +270,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   @override
   void visitParenthesizedExpression(ParenthesizedExpression node) {
     Expression expression = node.expression;
-    recordStaticType(node, _getStaticType(expression));
+    recordStaticType(node, expression.staticType);
   }
 
   /// The Dart Language Specification, 12.9: <blockquote>The static type of a rethrow expression is
@@ -294,14 +284,14 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// `String`.</blockquote>
   @override
   void visitSimpleStringLiteral(SimpleStringLiteral node) {
-    recordStaticType(node, _nonNullable(_typeProvider.stringType));
+    recordStaticType(node, _typeProvider.stringType);
   }
 
   /// The Dart Language Specification, 12.5: <blockquote>The static type of a string literal is
   /// `String`.</blockquote>
   @override
   void visitStringInterpolation(StringInterpolation node) {
-    recordStaticType(node, _nonNullable(_typeProvider.stringType));
+    recordStaticType(node, _typeProvider.stringType);
   }
 
   @override
@@ -318,7 +308,7 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
 
   @override
   void visitSymbolLiteral(SymbolLiteral node) {
-    recordStaticType(node, _nonNullable(_typeProvider.symbolType));
+    recordStaticType(node, _typeProvider.symbolType);
   }
 
   /// The Dart Language Specification, 12.10: <blockquote>The static type of `this` is the
@@ -344,10 +334,9 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
   /// Set the static type of [node] to be the least upper bound of the static
   /// types of subexpressions [expr1] and [expr2].
   void _analyzeLeastUpperBound(
-      Expression node, Expression expr1, Expression expr2,
-      {bool read = false}) {
-    DartType staticType1 = _getExpressionType(expr1, read: read);
-    DartType staticType2 = _getExpressionType(expr2, read: read);
+      Expression node, Expression expr1, Expression expr2) {
+    DartType staticType1 = expr1.staticType;
+    DartType staticType2 = expr2.staticType;
 
     _analyzeLeastUpperBoundTypes(node, staticType1, staticType2);
   }
@@ -369,41 +358,6 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
     staticType = _resolver.toLegacyTypeIfOptOut(staticType);
 
     recordStaticType(node, staticType);
-  }
-
-  /// Gets the definite type of expression, which can be used in cases where
-  /// the most precise type is desired, for example computing the least upper
-  /// bound.
-  ///
-  /// See [getExpressionType] for more information. Without strong mode, this is
-  /// equivalent to [_getStaticType].
-  DartType _getExpressionType(Expression expr, {bool read = false}) =>
-      getExpressionType(expr, _typeSystem, _typeProvider, read: read);
-
-  /// Return the static type of the given [expression].
-  DartType _getStaticType(Expression expression, {bool read = false}) {
-    DartType type;
-    if (read) {
-      type = getReadType(expression);
-    } else {
-      if (expression is SimpleIdentifier && expression.inSetterContext()) {
-        var element = expression.staticElement;
-        if (element is PromotableElement) {
-          // We're writing to the element so ignore promotions.
-          type = element.type;
-        } else {
-          type = expression.staticType;
-        }
-      } else {
-        type = expression.staticType;
-      }
-    }
-    if (type == null) {
-      // TODO(brianwilkerson) Determine the conditions for which the static type
-      // is null.
-      return _dynamicType;
-    }
-    return type;
   }
 
   /// Return the type represented by the given type [annotation].
@@ -472,14 +426,5 @@ class StaticTypeAnalyzer extends SimpleAstVisitor<void> {
       constructorElement = _resolver.toLegacyElement(constructorElement);
       constructor.staticElement = constructorElement;
     }
-  }
-
-  /// Return the non-nullable variant of the [type] if NNBD is enabled, otherwise
-  /// return the type itself.
-  DartType _nonNullable(DartType type) {
-    if (_isNonNullableByDefault) {
-      return _typeSystem.promoteToNonNull(type);
-    }
-    return type;
   }
 }

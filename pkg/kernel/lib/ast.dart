@@ -3362,203 +3362,6 @@ class PropertySet extends Expression {
   }
 }
 
-/// Directly read a field, call a getter, or tear off a method.
-class DirectPropertyGet extends Expression {
-  Expression receiver;
-  Reference targetReference;
-
-  DirectPropertyGet(Expression receiver, Member target)
-      : this.byReference(receiver, getMemberReference(target));
-
-  DirectPropertyGet.byReference(this.receiver, this.targetReference) {
-    receiver?.parent = this;
-  }
-
-  Member get target => targetReference?.asMember;
-
-  void set target(Member target) {
-    targetReference = getMemberReference(target);
-  }
-
-  Name get name => target?.name;
-
-  visitChildren(Visitor v) {
-    receiver?.accept(v);
-    target?.acceptReference(v);
-  }
-
-  transformChildren(Transformer v) {
-    if (receiver != null) {
-      receiver = receiver.accept<TreeNode>(v);
-      receiver?.parent = this;
-    }
-  }
-
-  R accept<R>(ExpressionVisitor<R> v) => v.visitDirectPropertyGet(this);
-  R accept1<R, A>(ExpressionVisitor1<R, A> v, A arg) =>
-      v.visitDirectPropertyGet(this, arg);
-
-  DartType getStaticType(StaticTypeContext context) {
-    Class superclass = target.enclosingClass;
-    var receiverType = receiver.getStaticTypeAsInstanceOf(superclass, context);
-    return Substitution.fromInterfaceType(receiverType)
-        .substituteType(target.getterType);
-  }
-
-  @override
-  String toString() {
-    return "DirectPropertyGet(${toStringInternal()})";
-  }
-
-  @override
-  void toTextInternal(AstPrinter printer) {
-    printer.writeExpression(receiver,
-        minimumPrecedence: astToText.Precedence.PRIMARY);
-    printer.write('.');
-    printer.writeInterfaceMemberName(targetReference, name);
-  }
-}
-
-/// Directly assign a field, or call a setter.
-///
-/// Evaluates to the value of [value].
-class DirectPropertySet extends Expression {
-  Expression receiver;
-  Reference targetReference;
-  Expression value;
-
-  DirectPropertySet(Expression receiver, Member target, Expression value)
-      : this.byReference(receiver, getMemberReference(target), value);
-
-  DirectPropertySet.byReference(
-      this.receiver, this.targetReference, this.value) {
-    receiver?.parent = this;
-    value?.parent = this;
-  }
-
-  Member get target => targetReference?.asMember;
-
-  void set target(Member target) {
-    targetReference = getMemberReference(target);
-  }
-
-  Name get name => target?.name;
-
-  visitChildren(Visitor v) {
-    receiver?.accept(v);
-    target?.acceptReference(v);
-    value?.accept(v);
-  }
-
-  transformChildren(Transformer v) {
-    if (receiver != null) {
-      receiver = receiver.accept<TreeNode>(v);
-      receiver?.parent = this;
-    }
-    if (value != null) {
-      value = value.accept<TreeNode>(v);
-      value?.parent = this;
-    }
-  }
-
-  R accept<R>(ExpressionVisitor<R> v) => v.visitDirectPropertySet(this);
-  R accept1<R, A>(ExpressionVisitor1<R, A> v, A arg) =>
-      v.visitDirectPropertySet(this, arg);
-
-  DartType getStaticType(StaticTypeContext context) =>
-      value.getStaticType(context);
-
-  @override
-  String toString() {
-    return "DirectPropertySet(${toStringInternal()})";
-  }
-
-  @override
-  void toTextInternal(AstPrinter printer) {
-    printer.writeExpression(receiver,
-        minimumPrecedence: astToText.Precedence.PRIMARY);
-    printer.write('.');
-    printer.writeInterfaceMemberName(targetReference, name);
-    printer.write(' = ');
-    printer.writeExpression(value);
-  }
-}
-
-/// Directly call an instance method, bypassing ordinary dispatch.
-class DirectMethodInvocation extends InvocationExpression {
-  Expression receiver;
-  Reference targetReference;
-  Arguments arguments;
-
-  DirectMethodInvocation(
-      Expression receiver, Procedure target, Arguments arguments)
-      : this.byReference(receiver, getMemberReference(target), arguments);
-
-  DirectMethodInvocation.byReference(
-      this.receiver, this.targetReference, this.arguments) {
-    receiver?.parent = this;
-    arguments?.parent = this;
-  }
-
-  Procedure get target => targetReference?.asProcedure;
-
-  void set target(Procedure target) {
-    targetReference = getMemberReference(target);
-  }
-
-  Name get name => target?.name;
-
-  visitChildren(Visitor v) {
-    receiver?.accept(v);
-    target?.acceptReference(v);
-    arguments?.accept(v);
-  }
-
-  transformChildren(Transformer v) {
-    if (receiver != null) {
-      receiver = receiver.accept<TreeNode>(v);
-      receiver?.parent = this;
-    }
-    if (arguments != null) {
-      arguments = arguments.accept<TreeNode>(v);
-      arguments?.parent = this;
-    }
-  }
-
-  R accept<R>(ExpressionVisitor<R> v) => v.visitDirectMethodInvocation(this);
-  R accept1<R, A>(ExpressionVisitor1<R, A> v, A arg) =>
-      v.visitDirectMethodInvocation(this, arg);
-
-  DartType getStaticType(StaticTypeContext context) {
-    if (context.typeEnvironment.isSpecialCasedBinaryOperator(target)) {
-      return context.typeEnvironment.getTypeOfSpecialCasedBinaryOperator(
-          receiver.getStaticType(context),
-          arguments.positional[0].getStaticType(context));
-    }
-    Class superclass = target.enclosingClass;
-    var receiverType = receiver.getStaticTypeAsInstanceOf(superclass, context);
-    var returnType = Substitution.fromInterfaceType(receiverType)
-        .substituteType(target.function.returnType);
-    return Substitution.fromPairs(
-            target.function.typeParameters, arguments.types)
-        .substituteType(returnType);
-  }
-
-  @override
-  String toString() {
-    return "DirectMethodInvocation(${toStringInternal()})";
-  }
-
-  @override
-  void toTextInternal(AstPrinter printer) {
-    printer.writeExpression(receiver,
-        minimumPrecedence: astToText.Precedence.PRIMARY);
-    printer.write('.');
-    printer.writeInterfaceMemberName(targetReference, name);
-    printer.writeArguments(arguments);
-  }
-}
-
 /// Expression of form `super.field`.
 ///
 /// This may invoke a getter, read a field, or tear off a method.
@@ -4339,13 +4142,25 @@ class Not extends Expression {
   }
 }
 
+enum LogicalExpressionOperator { AND, OR }
+
+String logicalExpressionOperatorToString(LogicalExpressionOperator operator) {
+  switch (operator) {
+    case LogicalExpressionOperator.AND:
+      return "&&";
+    case LogicalExpressionOperator.OR:
+      return "||";
+  }
+  throw "Unhandled LogicalExpressionOperator: ${operator}";
+}
+
 /// Expression of form `x && y` or `x || y`
 class LogicalExpression extends Expression {
   Expression left;
-  String operator; // && or || or ??
+  LogicalExpressionOperator operatorEnum; // AND (&&) or OR (||).
   Expression right;
 
-  LogicalExpression(this.left, this.operator, this.right) {
+  LogicalExpression(this.left, this.operatorEnum, this.right) {
     left?.parent = this;
     right?.parent = this;
   }
@@ -4382,7 +4197,7 @@ class LogicalExpression extends Expression {
   void toTextInternal(AstPrinter printer) {
     int minimumPrecedence = precedence;
     printer.writeExpression(left, minimumPrecedence: minimumPrecedence);
-    printer.write(' $operator ');
+    printer.write(' ${logicalExpressionOperatorToString(operatorEnum)} ');
     printer.writeExpression(right, minimumPrecedence: minimumPrecedence + 1);
   }
 }
@@ -8942,8 +8757,18 @@ class StringConstant extends PrimitiveConstant<String> {
   R accept<R>(ConstantVisitor<R> v) => v.visitStringConstant(this);
   R acceptReference<R>(Visitor<R> v) => v.visitStringConstantReference(this);
 
+  @override
   DartType getType(StaticTypeContext context) =>
       context.typeEnvironment.coreTypes.stringRawType(context.nonNullable);
+
+  @override
+  void toTextInternal(AstPrinter printer) {
+    printer.write('"');
+    printer.write(escapeString(value));
+    printer.write('"');
+  }
+
+  String toString() => 'StringConstant(${toStringInternal()})';
 }
 
 class SymbolConstant extends Constant {
@@ -8958,7 +8783,7 @@ class SymbolConstant extends Constant {
   R acceptReference<R>(Visitor<R> v) => v.visitSymbolConstantReference(this);
 
   @override
-  String toString() => 'StringConstant(${toStringInternal()})';
+  String toString() => 'SymbolConstant(${toStringInternal()})';
 
   int get hashCode => _Hash.hash2(name, libraryReference);
 

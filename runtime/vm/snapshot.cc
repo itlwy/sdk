@@ -229,6 +229,8 @@ const char* Snapshot::KindToCString(Kind kind) {
   switch (kind) {
     case kFull:
       return "full";
+    case kFullCore:
+      return "full-core";
     case kFullJIT:
       return "full-jit";
     case kFullAOT:
@@ -676,11 +678,7 @@ ObjectPtr SnapshotReader::ReadInstance(intptr_t object_id,
       offset += kWordSize;
     }
     if (ObjectLayout::IsCanonical(tags)) {
-      const char* error_str = NULL;
-      *result = result->CheckAndCanonicalize(thread(), &error_str);
-      if (error_str != NULL) {
-        FATAL1("Failed to canonicalize %s\n", error_str);
-      }
+      *result = result->Canonicalize(thread());
       ASSERT(!result->IsNull());
     }
   }

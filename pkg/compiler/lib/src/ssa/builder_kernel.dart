@@ -3010,12 +3010,8 @@ class KernelSsaGraphBuilder extends ir.Visitor {
   @override
   void visitLogicalExpression(ir.LogicalExpression node) {
     SsaBranchBuilder brancher = new SsaBranchBuilder(this);
-    String operator = node.operator;
-    // ir.LogicalExpression claims to allow '??' as an operator but currently
-    // that is expanded into a let-tree.
-    assert(operator == '&&' || operator == '||');
     _handleLogicalExpression(node.left, () => node.right.accept(this), brancher,
-        operator, _sourceInformationBuilder.buildBinary(node));
+        node.operatorEnum, _sourceInformationBuilder.buildBinary(node));
   }
 
   /// Optimizes logical binary expression where the left has the same logical
@@ -3031,22 +3027,22 @@ class KernelSsaGraphBuilder extends ir.Visitor {
       ir.Expression left,
       void visitRight(),
       SsaBranchBuilder brancher,
-      String operator,
+      ir.LogicalExpressionOperator operatorEnum,
       SourceInformation sourceInformation) {
-    if (left is ir.LogicalExpression && left.operator == operator) {
+    if (left is ir.LogicalExpression && left.operatorEnum == operatorEnum) {
       ir.Expression innerLeft = left.left;
       ir.Expression middle = left.right;
       _handleLogicalExpression(
           innerLeft,
-          () => _handleLogicalExpression(middle, visitRight, brancher, operator,
-              _sourceInformationBuilder.buildBinary(middle)),
+          () => _handleLogicalExpression(middle, visitRight, brancher,
+              operatorEnum, _sourceInformationBuilder.buildBinary(middle)),
           brancher,
-          operator,
+          operatorEnum,
           sourceInformation);
     } else {
       brancher.handleLogicalBinary(
           () => left.accept(this), visitRight, sourceInformation,
-          isAnd: operator == '&&');
+          isAnd: operatorEnum == ir.LogicalExpressionOperator.AND);
     }
   }
 
@@ -3461,33 +3457,6 @@ class KernelSsaGraphBuilder extends ir.Visitor {
 
     pop();
     stack.add(value);
-  }
-
-  @override
-  void visitDirectPropertyGet(ir.DirectPropertyGet node) {
-    node.receiver.accept(this);
-    HInstruction receiver = pop();
-
-    // Fake direct call with a dynamic call.
-    // TODO(sra): Implement direct invocations properly.
-    _pushDynamicInvocation(
-        node,
-        _getStaticType(node.receiver),
-        _typeInferenceMap.receiverTypeOfDirectGet(node),
-        new Selector.getter(_elementMap.getMember(node.target).memberName),
-        <HInstruction>[receiver],
-        const <DartType>[],
-        _sourceInformationBuilder.buildGet(node));
-  }
-
-  @override
-  void visitDirectPropertySet(ir.DirectPropertySet node) {
-    throw new UnimplementedError('ir.DirectPropertySet');
-  }
-
-  @override
-  void visitDirectMethodInvocation(ir.DirectMethodInvocation node) {
-    throw new UnimplementedError('ir.DirectMethodInvocation');
   }
 
   @override
@@ -4108,10 +4077,44 @@ class KernelSsaGraphBuilder extends ir.Visitor {
     }
   }
 
-  void _handleCreateInvocationMirror(ir.StaticInvocation invocation) {
-    ir.StringLiteral nameLiteral = invocation.arguments.positional[0];
-    String name = nameLiteral.value;
+  String _readStringLiteral(ir.Expression node) {
+    if (node is ir.StringLiteral) {
+      return node.value;
+    } else if (node is ir.ConstantExpression &&
+        node.constant is ir.StringConstant) {
+      ir.StringConstant constant = node.constant;
+      return constant.value;
+    } else {
+      return reporter.internalError(
+          _elementMap.getSpannable(targetElement, node),
+          "Unexpected string literal: "
+          "${node is ir.ConstantExpression ? node.constant : node}");
+    }
+  }
 
+  int _readIntLiteral(ir.Expression node) {
+    if (node is ir.IntLiteral) {
+      return node.value;
+    } else if (node is ir.ConstantExpression &&
+        node.constant is ir.IntConstant) {
+      ir.IntConstant constant = node.constant;
+      return constant.value;
+    } else if (node is ir.ConstantExpression &&
+        node.constant is ir.DoubleConstant) {
+      ir.DoubleConstant constant = node.constant;
+      assert(constant.value.floor() == constant.value,
+          "Unexpected int literal value ${constant.value}.");
+      return constant.value.toInt();
+    } else {
+      return reporter.internalError(
+          _elementMap.getSpannable(targetElement, node),
+          "Unexpected int literal: "
+          "${node is ir.ConstantExpression ? node.constant : node}");
+    }
+  }
+
+  void _handleCreateInvocationMirror(ir.StaticInvocation invocation) {
+    String name = _readStringLiteral(invocation.arguments.positional[0]);
     ir.ListLiteral typeArgumentsLiteral = invocation.arguments.positional[1];
     List<DartType> typeArguments =
         typeArgumentsLiteral.expressions.map((ir.Expression expression) {
@@ -4123,11 +4126,11 @@ class KernelSsaGraphBuilder extends ir.Visitor {
         invocation.arguments.positional[2];
     ir.Expression namedArgumentsLiteral = invocation.arguments.positional[3];
     Map<String, ir.Expression> namedArguments = {};
-    ir.IntLiteral kindLiteral = invocation.arguments.positional[4];
+    int kind = _readIntLiteral(invocation.arguments.positional[4]);
 
     Name memberName = new Name(name, _currentFrame.member.library);
     Selector selector;
-    switch (kindLiteral.value) {
+    switch (kind) {
       case invocationMirrorGetterKind:
         selector = new Selector.getter(memberName);
         break;
@@ -4142,8 +4145,8 @@ class KernelSsaGraphBuilder extends ir.Visitor {
         } else {
           if (namedArgumentsLiteral is ir.MapLiteral) {
             namedArgumentsLiteral.entries.forEach((ir.MapEntry entry) {
-              ir.StringLiteral key = entry.key;
-              namedArguments[key.value] = entry.value;
+              String key = _readStringLiteral(entry.key);
+              namedArguments[key] = entry.value;
             });
           } else if (namedArgumentsLiteral is ir.ConstantExpression &&
               namedArgumentsLiteral.constant is ir.MapConstant) {
@@ -4967,11 +4970,6 @@ class KernelSsaGraphBuilder extends ir.Visitor {
           new js.Template(null, js.objectLiteral(parameterNameMap));
 
       var nativeBehavior = new NativeBehavior()..codeTemplate = codeTemplate;
-      if (options.trustJSInteropTypeAnnotations) {
-        InterfaceType thisType =
-            _elementEnvironment.getThisType(constructor.enclosingClass);
-        nativeBehavior.typesReturned.add(thisType);
-      }
       registry.registerNativeMethod(element);
       // TODO(efortuna): Source information.
       return new HForeignCode(
@@ -4991,10 +4989,9 @@ class KernelSsaGraphBuilder extends ir.Visitor {
         ? _elementEnvironment.getThisType(element.enclosingClass)
         : _elementEnvironment.getFunctionType(element).returnType;
     // Native behavior effects here are similar to native/behavior.dart.
-    // The return type is dynamic if we don't trust js-interop type
+    // The return type is dynamic because we don't trust js-interop type
     // declarations.
-    nativeBehavior.typesReturned.add(
-        options.trustJSInteropTypeAnnotations ? type : dartTypes.dynamicType());
+    nativeBehavior.typesReturned.add(dartTypes.dynamicType());
 
     // The allocation effects include the declared type if it is native (which
     // includes js interop types).
@@ -5003,14 +5000,13 @@ class KernelSsaGraphBuilder extends ir.Visitor {
       nativeBehavior.typesInstantiated.add(type);
     }
 
-    // It also includes any other JS interop type if we don't trust the
-    // annotation or if is declared too broad.
-    if (!options.trustJSInteropTypeAnnotations ||
-        type == _commonElements.objectType ||
-        type is DynamicType) {
-      nativeBehavior.typesInstantiated.add(_elementEnvironment
-          .getThisType(_commonElements.jsJavaScriptObjectClass));
-    }
+    // It also includes any other JS interop type. Technically, a JS interop API
+    // could return anything, so the sound thing to do would be to assume that
+    // anything that may come from JS as instantiated. In order to prevent the
+    // resulting code bloat (e.g. from `dart:html`), we unsoundly assume that
+    // only JS interop types are returned.
+    nativeBehavior.typesInstantiated.add(_elementEnvironment
+        .getThisType(_commonElements.jsJavaScriptObjectClass));
 
     AbstractValue instructionType =
         _typeInferenceMap.typeFromNativeBehavior(nativeBehavior, closedWorld);
@@ -6878,6 +6874,11 @@ class InlineWeeder extends ir.Visitor {
   visitConstantExpression(ir.ConstantExpression node) {
     registerRegularNode();
     registerReductiveNode();
+    ir.Constant constant = node.constant;
+    // Avoid copying long strings into call site.
+    if (constant is ir.StringConstant && isLongString(constant.value)) {
+      data.hasLongString = true;
+    }
   }
 
   @override
@@ -7021,12 +7022,16 @@ class InlineWeeder extends ir.Visitor {
     node.visitChildren(this);
   }
 
+  /// Returns `true` if [value] is considered a long string for which copying
+  /// should be avoided.
+  bool isLongString(String value) => value.length > 14;
+
   @override
   visitStringLiteral(ir.StringLiteral node) {
     registerRegularNode();
     registerReductiveNode();
     // Avoid copying long strings into call site.
-    if (node.value.length > 14) {
+    if (isLongString(node.value)) {
       data.hasLongString = true;
     }
   }
@@ -7041,28 +7046,11 @@ class InlineWeeder extends ir.Visitor {
   }
 
   @override
-  visitDirectPropertyGet(ir.DirectPropertyGet node) {
-    registerCall();
-    registerRegularNode();
-    registerReductiveNode();
-    visit(node.receiver);
-  }
-
-  @override
   visitPropertySet(ir.PropertySet node) {
     registerCall();
     registerRegularNode();
     registerReductiveNode();
     skipReductiveNodes(() => visit(node.name));
-    visit(node.receiver);
-    visit(node.value);
-  }
-
-  @override
-  visitDirectPropertySet(ir.DirectPropertySet node) {
-    registerCall();
-    registerRegularNode();
-    registerReductiveNode();
     visit(node.receiver);
     visit(node.value);
   }

@@ -112,23 +112,6 @@ mixin ResolutionTest implements ResourceProviderMixin {
     assertType(node, type);
   }
 
-  void assertAuxElement(AstNode node, Element expected) {
-    var auxElements = getNodeAuxElements(node);
-    expect(auxElements?.staticElement, same(expected));
-  }
-
-  void assertAuxMember(
-    Expression node,
-    Element expectedBase,
-    Map<String, String> expectedSubstitution,
-  ) {
-    var actual = getNodeAuxElements(node)?.staticElement as ExecutableMember;
-
-    expect(actual.declaration, same(expectedBase));
-
-    assertSubstitution(actual.substitution, expectedSubstitution);
-  }
-
   void assertBinaryExpression(
     BinaryExpression node, {
     @required Object element,
@@ -397,6 +380,7 @@ mixin ResolutionTest implements ResourceProviderMixin {
     var isRead = node.inGetterContext();
     var isWrite = node.inSetterContext();
     if (isRead && isWrite) {
+      // ignore: deprecated_member_use_from_same_package
       assertElement(node.auxiliaryElements?.staticElement, readElement);
       assertElement(node.staticElement, writeElement);
     } else if (isRead) {
@@ -719,7 +703,9 @@ mixin ResolutionTest implements ResourceProviderMixin {
 
   void assertType(Object typeOrNode, String expected) {
     DartType actual;
-    if (typeOrNode is DartType) {
+    if (typeOrNode == null) {
+      actual = typeOrNode;
+    } else if (typeOrNode is DartType) {
       actual = typeOrNode;
     } else if (typeOrNode is Expression) {
       actual = typeOrNode.staticType;
@@ -821,14 +807,6 @@ mixin ResolutionTest implements ResourceProviderMixin {
       return nullable;
     } else {
       return legacy;
-    }
-  }
-
-  AuxiliaryElements getNodeAuxElements(AstNode node) {
-    if (node is IndexExpression) {
-      return node.auxiliaryElements;
-    } else {
-      fail('Unsupported node: (${node.runtimeType}) $node');
     }
   }
 

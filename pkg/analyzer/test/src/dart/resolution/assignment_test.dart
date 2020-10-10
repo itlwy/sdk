@@ -466,21 +466,14 @@ void f(num x, int y) {
   }
 
   test_notLValue_postfixIncrement_compound_ifNull() async {
-    await assertErrorsInCode(
-      '''
+    await assertErrorsInCode('''
 void f(num x, int y) {
   x++ ??= y;
 }
-''',
-      expectedErrorsByNullability(nullable: [
-        error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 25, 3),
-        error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 25, 3),
-        error(StaticWarningCode.DEAD_NULL_AWARE_EXPRESSION, 33, 1),
-      ], legacy: [
-        error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 25, 3),
-        error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 25, 3),
-      ]),
-    );
+''', [
+      error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 25, 3),
+      error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 25, 3),
+    ]);
 
     assertAssignment(
       findNode.assignment('= y'),
@@ -557,21 +550,14 @@ void f(num x, int y) {
   }
 
   test_notLValue_prefixIncrement_compound_ifNull() async {
-    await assertErrorsInCode(
-      '''
+    await assertErrorsInCode('''
 void f(num x, int y) {
   ++x ??= y;
 }
-''',
-      expectedErrorsByNullability(nullable: [
-        error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 25, 3),
-        error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 25, 3),
-        error(StaticWarningCode.DEAD_NULL_AWARE_EXPRESSION, 33, 1),
-      ], legacy: [
-        error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 25, 3),
-        error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 25, 3),
-      ]),
-    );
+''', [
+      error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 25, 3),
+      error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 25, 3),
+    ]);
 
     assertAssignment(
       findNode.assignment('= y'),
@@ -1103,6 +1089,43 @@ void f(A a) {
       readElement: findElement.getter('x'),
       writeElement: findElement.setter('x'),
       type: 'num',
+    );
+
+    assertType(assignment.rightHandSide, 'int');
+  }
+
+  test_propertyAccess_instance_fromMixins_compound() async {
+    await assertNoErrorsInCode('''
+class M1 {
+  int get x => 0;
+  set x(num _) {}
+}
+
+class M2 {
+  int get x => 0;
+  set x(num _) {}
+}
+
+class C with M1, M2 {
+}
+
+void f(C c) {
+  (c).x += 2;
+}
+''');
+
+    var assignment = findNode.assignment('x += 2');
+    assertAssignment(
+      assignment,
+      readElement: findElement.getter('x', of: 'M2'),
+      readType: 'int',
+      writeElement: findElement.setter('x', of: 'M2'),
+      writeType: 'num',
+      operatorElement: elementMatcher(
+        numElement.getMethod('+'),
+        isLegacy: isNullSafetySdkAndLegacyLibrary,
+      ),
+      type: 'int',
     );
 
     assertType(assignment.rightHandSide, 'int');
@@ -1789,7 +1812,7 @@ void f(int x) {
 
   test_simpleIdentifier_parameter_compound_refineType_int_int() async {
     await assertNoErrorsInCode(r'''
-main(int x) {
+void f(int x) {
   x += 1;
   x -= 1;
   x *= 1;

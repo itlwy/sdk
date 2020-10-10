@@ -206,7 +206,7 @@ class KernelTypeGraphBuilder extends ir.Visitor<TypeInformation> {
 
   TypeInformation run() {
     if (_analyzedMember.isField) {
-      if (_analyzedNode == null || _analyzedNode is ir.NullLiteral) {
+      if (_analyzedNode == null || isNullLiteral(_analyzedNode)) {
         // Eagerly bailout, because computing the closure data only
         // works for functions and field assignments.
         return _types.nullType;
@@ -301,8 +301,7 @@ class KernelTypeGraphBuilder extends ir.Visitor<TypeInformation> {
           assert(definition.kind == MemberKind.regular);
           ir.Field node = definition.node;
           if (type == null &&
-              (node.initializer == null ||
-                  node.initializer is ir.NullLiteral)) {
+              (node.initializer == null || isNullLiteral(node.initializer))) {
             _inferrer.recordTypeOfField(member, _types.nullType);
           }
         }
@@ -1455,13 +1454,6 @@ class KernelTypeGraphBuilder extends ir.Visitor<TypeInformation> {
   }
 
   @override
-  TypeInformation visitDirectPropertyGet(ir.DirectPropertyGet node) {
-    TypeInformation receiverType = thisType;
-    return handlePropertyGet(node, node.receiver, receiverType, node.target,
-        isThis: true);
-  }
-
-  @override
   TypeInformation visitPropertySet(ir.PropertySet node) {
     TypeInformation receiverType = visit(node.receiver);
     Selector selector = _elementMap.getSelector(node);
@@ -1591,7 +1583,7 @@ class KernelTypeGraphBuilder extends ir.Visitor<TypeInformation> {
 
   @override
   TypeInformation visitLogicalExpression(ir.LogicalExpression node) {
-    if (node.operator == '&&') {
+    if (node.operatorEnum == ir.LogicalExpressionOperator.AND) {
       LocalState stateBefore = _state;
       _state = new LocalState.childPath(stateBefore);
       TypeInformation leftInfo = handleCondition(node.left);
@@ -1616,7 +1608,7 @@ class KernelTypeGraphBuilder extends ir.Visitor<TypeInformation> {
       }
       // TODO(sra): Add a selector/mux node to improve precision.
       return _types.boolType;
-    } else if (node.operator == '||') {
+    } else if (node.operatorEnum == ir.LogicalExpressionOperator.OR) {
       LocalState stateBefore = _state;
       _state = new LocalState.childPath(stateBefore);
       TypeInformation leftInfo = handleCondition(node.left);
@@ -1643,7 +1635,7 @@ class KernelTypeGraphBuilder extends ir.Visitor<TypeInformation> {
       return _types.boolType;
     }
     failedAt(CURRENT_ELEMENT_SPANNABLE,
-        "Unexpected logical operator '${node.operator}'.");
+        "Unexpected logical operator '${node.operatorEnum}'.");
     return null;
   }
 

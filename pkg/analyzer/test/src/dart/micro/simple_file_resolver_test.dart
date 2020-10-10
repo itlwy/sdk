@@ -312,6 +312,13 @@ analyzer:
     implicit-casts: false
 ''');
 
+    newFile('/workspace/thid_party/dart/aaa/analysis_options.yaml',
+        content: r'''
+analyzer:
+  strong-mode:
+    implicit-casts: true
+''');
+
     var aPath = convertPath('/workspace/third_party/dart/aaa/lib/a.dart');
     await assertErrorsInFile(aPath, r'''
 num a = 0;
@@ -571,6 +578,21 @@ int b = a;
 ''', [
       error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 19, 1),
     ]);
+  }
+
+  test_switchCase_implementsEquals_enum() async {
+    await assertNoErrorsInCode(r'''
+enum MyEnum {a, b, c}
+
+void f(MyEnum myEnum) {
+  switch (myEnum) {
+    case MyEnum.a:
+      break;
+    default:
+      break;
+  }
+}
+''');
   }
 
   test_unknown_uri() async {

@@ -3,7 +3,6 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:analysis_server/lsp_protocol/protocol_custom_generated.dart';
 import 'package:analysis_server/lsp_protocol/protocol_generated.dart';
@@ -48,6 +47,10 @@ abstract class AbstractLspAnalysisServerTest
   MockLspServerChannel channel;
   TestPluginManager pluginManager;
   LspAnalysisServer server;
+
+  final testWorkDoneToken = Either2<num, String>.t2('test');
+
+  AnalysisServerOptions get serverOptions => AnalysisServerOptions();
 
   @override
   Stream<Message> get serverToClient => channel.serverToClient;
@@ -121,7 +124,7 @@ abstract class AbstractLspAnalysisServerTest
     server = LspAnalysisServer(
         channel,
         resourceProvider,
-        AnalysisServerOptions(),
+        serverOptions,
         DartSdkManager(convertPath('/sdk')),
         CrashReportingAttachmentsBuilder.empty,
         InstrumentationService.NULL_SERVICE);
@@ -153,16 +156,13 @@ mixin ClientCapabilitiesHelperMixin {
 
   final emptyWorkspaceClientCapabilities = ClientCapabilitiesWorkspace();
 
+  final emptyWindowClientCapabilities = ClientCapabilitiesWindow();
+
   TextDocumentClientCapabilities extendTextDocumentCapabilities(
     TextDocumentClientCapabilities source,
     Map<String, dynamic> textDocumentCapabilities,
   ) {
-    // TODO(dantup): Figure out why we need to do this to get a map...
-    // source.toJson() doesn't recursively called toJson() so we end up with
-    // objects (instead of maps) in child properties, which means multiple
-    // calls to this function do not work correctly. For now, calling jsonEncode
-    // then jsonDecode will force recursive serialisation.
-    final json = jsonDecode(jsonEncode(source));
+    final json = source.toJson();
     if (textDocumentCapabilities != null) {
       textDocumentCapabilities.keys.forEach((key) {
         json[key] = textDocumentCapabilities[key];
@@ -171,13 +171,24 @@ mixin ClientCapabilitiesHelperMixin {
     return TextDocumentClientCapabilities.fromJson(json);
   }
 
+  ClientCapabilitiesWindow extendWindowCapabilities(
+    ClientCapabilitiesWindow source,
+    Map<String, dynamic> windowCapabilities,
+  ) {
+    final json = source.toJson();
+    if (windowCapabilities != null) {
+      windowCapabilities.keys.forEach((key) {
+        json[key] = windowCapabilities[key];
+      });
+    }
+    return ClientCapabilitiesWindow.fromJson(json);
+  }
+
   ClientCapabilitiesWorkspace extendWorkspaceCapabilities(
     ClientCapabilitiesWorkspace source,
     Map<String, dynamic> workspaceCapabilities,
   ) {
-    // TODO(dantup): As above - it seems like this round trip should be
-    // unnecessary.
-    final json = jsonDecode(jsonEncode(source));
+    final json = source.toJson();
     if (workspaceCapabilities != null) {
       workspaceCapabilities.keys.forEach((key) {
         json[key] = workspaceCapabilities[key];
@@ -371,6 +382,11 @@ mixin ClientCapabilitiesHelperMixin {
       'synchronization': {'dynamicRegistration': true}
     });
   }
+
+  ClientCapabilitiesWindow withWorkDoneProgressSupport(
+      ClientCapabilitiesWindow source) {
+    return extendWindowCapabilities(source, {'workDoneProgress': true});
+  }
 }
 
 mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
@@ -389,6 +405,13 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
   final startOfDocRange = Range(
       start: Position(line: 0, character: 0),
       end: Position(line: 0, character: 0));
+
+  /// The client capabilities sent to the server during initialization.
+  ///
+  /// null if an initialization request has not yet been sent.
+  ClientCapabilities _clientCapabilities;
+
+  final validProgressTokens = <Either2<num, String>>{};
 
   /// A stream of [NotificationMessage]s from the server that may be errors.
   Stream<NotificationMessage> get errorNotificationsFromServer {
@@ -569,12 +592,23 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
     await sendNotificationToServer(notification);
   }
 
-  Future<Object> executeCommand(Command command) async {
+  Future<Object> executeCodeAction(
+      Either2<Command, CodeAction> codeAction) async {
+    final command = codeAction.map(
+      (command) => command,
+      (codeAction) => codeAction.command,
+    );
+    return executeCommand(command);
+  }
+
+  Future<Object> executeCommand(Command command,
+      {Either2<num, String> workDoneToken}) async {
     final request = makeRequest(
       Method.workspace_executeCommand,
       ExecuteCommandParams(
         command: command.command,
         arguments: command.arguments,
+        workDoneToken: workDoneToken,
       ),
     );
     return expectSuccessfulResponseTo(request, (result) => result);
@@ -923,13 +957,20 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
     @required FutureOr<RR> Function(R) handler,
     Duration timeout = const Duration(seconds: 5),
   }) async {
-    FutureOr<T> outboundRequest;
+    Future<T> outboundRequest;
 
     // Run [f] and wait for the incoming request from the server.
     final incomingRequest = await expectRequest(method, () {
       // Don't return/await the response yet, as this may not complete until
       // after we have handled the request that comes from the server.
       outboundRequest = f();
+
+      // Because we don't await this future until "later", if it throws the
+      // error is treated as unhandled and will fail the test. Attaching an
+      // error handler prevents that, though since the Future completed with
+      // an error it will still be handled as such when the future is later
+      // awaited.
+      outboundRequest.catchError((_) {});
     });
 
     // Handle the request from the server and send the response back.
@@ -957,6 +998,20 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
     bool throwOnFailure = true,
     bool allowEmptyRootUri = false,
   }) async {
+    _clientCapabilities = ClientCapabilities(
+      workspace: workspaceCapabilities,
+      textDocument: textDocumentCapabilities,
+      window: windowCapabilities,
+    );
+
+    // Handle any standard incoming requests that aren't test-specific, for example
+    // accepting requests to create progress tokens.
+    requestsFromServer.listen((request) async {
+      if (request.method == Method.window_workDoneProgress_create) {
+        respondTo(request, await _handleWorkDoneProgressCreate(request));
+      }
+    });
+
     // Assume if none of the project options were set, that we want to default to
     // opening the test project folder.
     if (rootPath == null &&
@@ -971,11 +1026,7 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
           rootPath: rootPath,
           rootUri: rootUri?.toString(),
           initializationOptions: initializationOptions,
-          capabilities: ClientCapabilities(
-            workspace: workspaceCapabilities,
-            textDocument: textDocumentCapabilities,
-            window: windowCapabilities,
-          ),
+          capabilities: _clientCapabilities,
           workspaceFolders: workspaceFolders?.map(toWorkspaceFolder)?.toList(),
         ));
     final response = await sendRequestToServer(request);
@@ -1268,23 +1319,56 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
     );
   }
 
-  Future<AnalyzerStatusParams> waitForAnalysisComplete() =>
-      waitForAnalysisStatus(false);
+  Future<void> waitForAnalysisComplete() => waitForAnalysisStatus(false);
 
-  Future<AnalyzerStatusParams> waitForAnalysisStart() =>
-      waitForAnalysisStatus(true);
+  Future<void> waitForAnalysisStart() => waitForAnalysisStatus(true);
 
-  Future<AnalyzerStatusParams> waitForAnalysisStatus(bool analyzing) async {
-    AnalyzerStatusParams params;
+  Future<void> waitForAnalysisStatus(bool analyzing) async {
     await serverToClient.firstWhere((message) {
-      if (message is NotificationMessage &&
-          message.method == CustomMethods.AnalyzerStatus) {
-        params = AnalyzerStatusParams.fromJson(message.params);
-        return params.isAnalyzing == analyzing;
+      if (message is NotificationMessage) {
+        if (message.method == CustomMethods.AnalyzerStatus) {
+          if (_clientCapabilities.window?.workDoneProgress == true) {
+            throw Exception(
+                'Recieved ${CustomMethods.AnalyzerStatus} notification '
+                'but client supports workDoneProgress');
+          }
+
+          final params = AnalyzerStatusParams.fromJson(message.params);
+          return params.isAnalyzing == analyzing;
+        } else if (message.method == Method.progress) {
+          if (_clientCapabilities.window?.workDoneProgress != true) {
+            throw Exception(
+                'Recieved ${CustomMethods.AnalyzerStatus} notification '
+                'but client supports workDoneProgress');
+          }
+
+          final params = ProgressParams.fromJson(message.params);
+          if (!validProgressTokens.contains(params.token)) {
+            throw Exception('Server sent a progress notification for a token '
+                'that has not been created: ${params.token}');
+          }
+
+          // Skip unrelated progress notifications.
+          if (params.token != analyzingProgressToken) {
+            return false;
+          }
+
+          if (params.value is Map<String, dynamic>) {
+            final isDesiredStatusMessage = analyzing
+                ? WorkDoneProgressBegin.canParse(
+                    params.value, nullLspJsonReporter)
+                : WorkDoneProgressEnd.canParse(
+                    params.value, nullLspJsonReporter);
+
+            return isDesiredStatusMessage;
+          } else {
+            throw Exception('\$/progress params value was not valid');
+          }
+        }
       }
+      // Message is not what we're waiting for.
       return false;
     });
-    return params;
   }
 
   Future<List<ClosingLabel>> waitForClosingLabels(Uri uri) async {
@@ -1311,8 +1395,8 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
         return diagnosticParams.uri == uri.toString();
       }
       return false;
-    });
-    return diagnosticParams.diagnostics;
+    }, orElse: () => null);
+    return diagnosticParams?.diagnostics;
   }
 
   Future<FlutterOutline> waitForFlutterOutline(Uri uri) async {
@@ -1361,6 +1445,18 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
   List<T> Function(List<dynamic>) _fromJsonList<T>(
           T Function(Map<String, dynamic>) fromJson) =>
       (input) => input.cast<Map<String, dynamic>>().map(fromJson).toList();
+
+  Future<void> _handleWorkDoneProgressCreate(RequestMessage request) async {
+    if (_clientCapabilities.window?.workDoneProgress != true) {
+      throw Exception('Server sent ${Method.window_workDoneProgress_create} '
+          'but client capabilities do not allow');
+    }
+    final params = WorkDoneProgressCreateParams.fromJson(request.params);
+    if (validProgressTokens.contains(params.token)) {
+      throw Exception('Server tried to create the same progress token twice');
+    }
+    validProgressTokens.add(params.token);
+  }
 
   /// Checks whether a notification is likely an error from the server (for
   /// example a window/showMessage). This is useful for tests that want to

@@ -40,6 +40,9 @@ import 'package:analyzer/src/workspace/workspace.dart';
 import 'package:meta/meta.dart';
 import 'package:yaml/yaml.dart';
 
+const M = 1024 * 1024 /*1 MiB*/;
+const memoryCacheSize = 200 * M;
+
 class FileContext {
   final AnalysisOptionsImpl analysisOptions;
   final FileState file;
@@ -113,7 +116,7 @@ class FileResolver {
         getFileDigest = getFileDigest,
         prefetchFiles = prefetchFiles,
         workspace = workspace {
-    byteStore ??= CiderMemoryByteStore();
+    byteStore ??= CiderCachedByteStore(memoryCacheSize);
     this.byteStore = byteStore;
     _libraryContextReset = _LibraryContextReset(
       fileResolver: this,
@@ -150,9 +153,7 @@ class FileResolver {
     // Remove libraries represented by removed files.
     // If we need these libraries later, we will relink and reattach them.
     if (libraryContext != null) {
-      libraryContext.elementFactory.removeLibraries(
-        removedFiles.map((e) => e.uriStr).toList(),
-      );
+      libraryContext.remove(removedFiles);
     }
   }
 
@@ -459,10 +460,17 @@ class FileResolver {
   }) {
     YamlMap optionMap;
 
-    var optionsFile = performance.run('findOptionsFile', (_) {
-      var folder = resourceProvider.getFile(path).parent;
-      return _findOptionsFile(folder);
-    });
+    var separator = resourceProvider.pathContext.separator;
+    var isThirdParty =
+        path.contains('${separator}third_party${separator}dart$separator');
+
+    File optionsFile;
+    if (!isThirdParty) {
+      optionsFile = performance.run('findOptionsFile', (_) {
+        var folder = resourceProvider.getFile(path).parent;
+        return _findOptionsFile(folder);
+      });
+    }
 
     if (optionsFile != null) {
       performance.run('getOptionsFromFile', (_) {
@@ -476,9 +484,7 @@ class FileResolver {
     } else {
       var source = performance.run('defaultOptions', (_) {
         if (workspace is WorkspaceWithDefaultAnalysisOptions) {
-          var separator = resourceProvider.pathContext.separator;
-          if (path
-              .contains('${separator}third_party${separator}dart$separator')) {
+          if (isThirdParty) {
             return sourceFactory.forUri(
               WorkspaceWithDefaultAnalysisOptions.thirdPartyUri,
             );
@@ -583,8 +589,11 @@ class _LibraryContext {
     this.contextObjects,
     this.librariesLog,
   ) {
-    // TODO(scheglov) remove it?
-    _createElementFactory();
+    elementFactory = LinkedElementFactory(
+      contextObjects.analysisContext,
+      contextObjects.analysisSession,
+      Reference.root(),
+    );
   }
 
   /// Load data required to access elements of the given [targetLibrary].
@@ -685,8 +694,9 @@ class _LibraryContext {
       // the element factory - it is empty anyway.
       if (!elementFactory.hasDartCore) {
         contextObjects.analysisContext.clearTypeProvider();
-        _createElementFactory();
+        elementFactory.declareDartCoreDynamicNever();
       }
+
       var cBundle = CiderLinkedLibraryCycle.fromBuffer(bytes);
       inputBundles.add(cBundle.bundle);
       elementFactory.addBundle(
@@ -714,29 +724,19 @@ class _LibraryContext {
         '[librariesLinkedTimer: ${librariesLinkedTimer.elapsedMilliseconds} ms]',
       );
     });
-
-    // There might be a rare (and wrong) situation, when the external summaries
-    // already include the [targetLibrary]. When this happens, [loadBundle]
-    // exists without doing any work. But the type provider must be created.
-    _createElementFactoryTypeProvider();
   }
 
-  void _createElementFactory() {
-    elementFactory = LinkedElementFactory(
-      contextObjects.analysisContext,
-      contextObjects.analysisSession,
-      Reference.root(),
+  /// Remove libraries represented by the [removed] files.
+  /// If we need these libraries later, we will relink and reattach them.
+  void remove(List<FileState> removed) {
+    elementFactory.removeLibraries(
+      removed.map((e) => e.uriStr).toList(),
     );
-  }
 
-  /// Ensure that type provider is created.
-  void _createElementFactoryTypeProvider() {
-    var analysisContext = contextObjects.analysisContext;
-    if (analysisContext.typeProviderNonNullableByDefault == null) {
-      var dartCore = elementFactory.libraryOfUri('dart:core');
-      var dartAsync = elementFactory.libraryOfUri('dart:async');
-      elementFactory.createTypeProviders(dartCore, dartAsync);
-    }
+    var removedSet = removed.toSet();
+    loadedBundles.removeWhere((cycle) {
+      return cycle.libraries.any(removedSet.contains);
+    });
   }
 
   static CiderLinkedLibraryCycleBuilder serializeBundle(

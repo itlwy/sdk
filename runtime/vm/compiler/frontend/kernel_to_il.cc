@@ -1822,8 +1822,10 @@ void FlowGraphBuilder::BuildArgumentTypeChecks(
     Fragment* checks = is_covariant ? explicit_checks : implicit_checks;
 
     *checks += LoadLocal(param);
-    *checks += CheckAssignable(*target_type, name,
-                               AssertAssignableInstr::kParameterCheck);
+    *checks += AssertAssignableLoadTypeArguments(
+        TokenPosition::kNoSource, *target_type, name,
+        AssertAssignableInstr::kParameterCheck);
+    *checks += StoreLocal(param);
     *checks += Drop();
 
     if (!is_covariant && implicit_redefinitions != nullptr && optimizing_) {
@@ -3371,7 +3373,7 @@ Fragment FlowGraphBuilder::FfiPointerFromAddress(const Type& result_type) {
   // do not appear in the type arguments to a any Pointer classes in an FFI
   // signature.
   ASSERT(args.IsNull() || args.IsInstantiated());
-  args = args.Canonicalize();
+  args = args.Canonicalize(thread_, nullptr);
 
   Fragment code;
   code += Constant(args);

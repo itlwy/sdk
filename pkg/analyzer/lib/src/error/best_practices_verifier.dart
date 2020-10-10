@@ -23,6 +23,7 @@ import 'package:analyzer/src/dart/resolver/body_inference_context.dart';
 import 'package:analyzer/src/dart/resolver/exit_detector.dart';
 import 'package:analyzer/src/dart/resolver/scope.dart';
 import 'package:analyzer/src/error/codes.dart';
+import 'package:analyzer/src/error/must_call_super_verifier.dart';
 import 'package:analyzer/src/generated/constant.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/resolver.dart';
@@ -48,6 +49,10 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   /// is deprecated.
   bool _inDeprecatedMember;
 
+  /// A flag indicating whether a surrounding member is annotated as
+  /// `@doNotStore`.
+  bool _inDoNotStoreMember;
+
   /// The error reporter by which errors will be reported.
   final ErrorReporter _errorReporter;
 
@@ -64,6 +69,8 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   final LibraryElement _currentLibrary;
 
   final _InvalidAccessVerifier _invalidAccessVerifier;
+
+  final MustCallSuperVerifier _mustCallSuperVerifier;
 
   /// The [WorkspacePackage] in which [_currentLibrary] is declared.
   final WorkspacePackage _workspacePackage;
@@ -99,8 +106,10 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
         _inheritanceManager = inheritanceManager,
         _invalidAccessVerifier = _InvalidAccessVerifier(
             _errorReporter, _currentLibrary, workspacePackage),
+        _mustCallSuperVerifier = MustCallSuperVerifier(_errorReporter),
         _workspacePackage = workspacePackage {
     _inDeprecatedMember = _currentLibrary.hasDeprecated;
+    _inDoNotStoreMember = _currentLibrary.hasDoNotStore;
 
     _linterContext = LinterContextImpl(
       null /* allUnits */,
@@ -305,8 +314,12 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     _invalidAccessVerifier._enclosingClass = element;
 
     bool wasInDeprecatedMember = _inDeprecatedMember;
+    bool wasInDoNotStoreMember = _inDoNotStoreMember;
     if (element != null && element.hasDeprecated) {
       _inDeprecatedMember = true;
+    }
+    if (element != null && element.hasDoNotStore) {
+      _inDoNotStoreMember = true;
     }
 
     try {
@@ -319,6 +332,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
       _enclosingClass = null;
       _invalidAccessVerifier._enclosingClass = null;
       _inDeprecatedMember = wasInDeprecatedMember;
+      _inDoNotStoreMember = wasInDoNotStoreMember;
     }
   }
 
@@ -403,20 +417,14 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
               [field.name, overriddenElement.enclosingElement.name]);
         }
 
-        var expression = field.initializer;
-
-        var element = _getElement(expression);
-        if (element != null) {
-          if (element is PropertyAccessorElement && element.isSynthetic) {
-            element = (element as PropertyAccessorElement).variable;
-          }
-          if (element.hasOrInheritsDoNotStore) {
-            _errorReporter.reportErrorForNode(
-              HintCode.ASSIGNMENT_OF_DO_NOT_STORE,
-              expression,
-              [element.name],
-            );
-          }
+        var expressionMap =
+            _getSubExpressionsMarkedDoNotStore(field.initializer);
+        for (var entry in expressionMap.entries) {
+          _errorReporter.reportErrorForNode(
+            HintCode.ASSIGNMENT_OF_DO_NOT_STORE,
+            entry.key,
+            [entry.value.name],
+          );
         }
       }
     } finally {
@@ -433,9 +441,13 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   @override
   void visitFunctionDeclaration(FunctionDeclaration node) {
     bool wasInDeprecatedMember = _inDeprecatedMember;
+    bool wasInDoNotStoreMember = _inDoNotStoreMember;
     ExecutableElement element = node.declaredElement;
     if (element != null && element.hasDeprecated) {
       _inDeprecatedMember = true;
+    }
+    if (element != null && element.hasDoNotStore) {
+      _inDoNotStoreMember = true;
     }
     try {
       _checkForMissingReturn(
@@ -450,6 +462,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
       super.visitFunctionDeclaration(node);
     } finally {
       _inDeprecatedMember = wasInDeprecatedMember;
+      _inDoNotStoreMember = wasInDoNotStoreMember;
     }
   }
 
@@ -549,6 +562,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   @override
   void visitMethodDeclaration(MethodDeclaration node) {
     bool wasInDeprecatedMember = _inDeprecatedMember;
+    bool wasInDoNotStoreMember = _inDoNotStoreMember;
     ExecutableElement element = node.declaredElement;
     Element enclosingElement = element?.enclosingElement;
 
@@ -572,10 +586,14 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     if (element != null && element.hasDeprecated) {
       _inDeprecatedMember = true;
     }
+    if (element != null && element.hasDoNotStore) {
+      _inDoNotStoreMember = true;
+    }
     try {
       // This was determined to not be a good hint, see: dartbug.com/16029
       //checkForOverridingPrivateMember(node);
       _checkForMissingReturn(node.returnType, node.body, element, node);
+      _mustCallSuperVerifier.checkMethodDeclaration(node);
       _checkForUnnecessaryNoSuchMethod(node);
 
       if (!node.isSetter && !elementIsOverride()) {
@@ -598,6 +616,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
       super.visitMethodDeclaration(node);
     } finally {
       _inDeprecatedMember = wasInDeprecatedMember;
+      _inDoNotStoreMember = wasInDoNotStoreMember;
     }
   }
 
@@ -1053,6 +1072,22 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
             HintCode.INVALID_EXPORT_OF_INTERNAL_ELEMENT,
             node,
             [element.displayName]);
+      } else if (element is FunctionElement) {
+        var signatureTypes = [
+          ...element.parameters.map((p) => p.type),
+          element.returnType,
+          ...element.typeParameters.map((tp) => tp.bound),
+        ];
+        for (var type in signatureTypes) {
+          var typeElement = type?.element?.enclosingElement;
+          if (typeElement is GenericTypeAliasElement &&
+              typeElement.hasInternal) {
+            _errorReporter.reportErrorForNode(
+                HintCode.INVALID_EXPORT_OF_INTERNAL_ELEMENT_INDIRECTLY,
+                node,
+                [typeElement.name, element.displayName]);
+          }
+        }
       }
     });
   }
@@ -1359,15 +1394,18 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   }
 
   void _checkForReturnOfDoNotStore(Expression expression) {
-    var element = _getElement(expression);
-    if (element != null && element.hasOrInheritsDoNotStore) {
-      var parent = expression.thisOrAncestorMatching(
+    if (_inDoNotStoreMember) {
+      return;
+    }
+    var expressionMap = _getSubExpressionsMarkedDoNotStore(expression);
+    if (expressionMap.isNotEmpty) {
+      Declaration parent = expression.thisOrAncestorMatching(
           (e) => e is FunctionDeclaration || e is MethodDeclaration);
-      if (parent is Declaration && !parent.declaredElement.hasDoNotStore) {
+      for (var entry in expressionMap.entries) {
         _errorReporter.reportErrorForNode(
           HintCode.RETURN_OF_DO_NOT_STORE,
-          expression,
-          [element.name, parent.declaredElement.displayName],
+          entry.key,
+          [entry.value.name, parent.declaredElement.displayName],
         );
       }
     }
@@ -1516,7 +1554,13 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     }
   }
 
-  Element _getElement(Expression expression) {
+  /// Return subexpressions that are marked `@doNotStore`, as a map so that
+  /// corresponding elements can be used in the diagnostic message.
+  Map<Expression, Element> _getSubExpressionsMarkedDoNotStore(
+      Expression expression,
+      {Map<Expression, Element> addTo}) {
+    var expressions = addTo ?? <Expression, Element>{};
+
     Element element;
     if (expression is PropertyAccess) {
       element = expression.propertyName.staticElement;
@@ -1532,13 +1576,26 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
       if (element is FunctionElement || element is MethodElement) {
         element = null;
       }
+    } else if (expression is ConditionalExpression) {
+      _getSubExpressionsMarkedDoNotStore(expression.elseExpression,
+          addTo: expressions);
+      _getSubExpressionsMarkedDoNotStore(expression.thenExpression,
+          addTo: expressions);
+    } else if (expression is BinaryExpression) {
+      _getSubExpressionsMarkedDoNotStore(expression.leftOperand,
+          addTo: expressions);
+      _getSubExpressionsMarkedDoNotStore(expression.rightOperand,
+          addTo: expressions);
     }
-    if (element != null) {
-      if (element is PropertyAccessorElement && element.isSynthetic) {
-        element = (element as PropertyAccessorElement).variable;
-      }
+    if (element is PropertyAccessorElement && element.isSynthetic) {
+      element = (element as PropertyAccessorElement).variable;
     }
-    return element;
+
+    if (element != null && element.hasOrInheritsDoNotStore) {
+      expressions[expression] = element;
+    }
+
+    return expressions;
   }
 
   bool _isLibraryInWorkspacePackage(LibraryElement library) {

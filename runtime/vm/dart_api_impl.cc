@@ -1415,6 +1415,8 @@ Isolate* CreateWithinExistingIsolateGroup(IsolateGroup* group,
     BackgroundCompiler::Stop(isolate);
     isolate->heap()->WaitForMarkerTasks(thread);
     isolate->heap()->WaitForSweeperTasks(thread);
+    SafepointOperationScope safepoint_operation(thread);
+    isolate->group()->ReleaseStoreBuffers();
     RELEASE_ASSERT(isolate->heap()->old_space()->tasks() == 0);
   }
 
@@ -1932,7 +1934,8 @@ DART_EXPORT Dart_Handle
 Dart_CreateSnapshot(uint8_t** vm_snapshot_data_buffer,
                     intptr_t* vm_snapshot_data_size,
                     uint8_t** isolate_snapshot_data_buffer,
-                    intptr_t* isolate_snapshot_data_size) {
+                    intptr_t* isolate_snapshot_data_size,
+                    bool is_core) {
 #if defined(DART_PRECOMPILED_RUNTIME)
   return Api::NewError("Cannot create snapshots on an AOT runtime.");
 #else
@@ -1964,8 +1967,10 @@ Dart_CreateSnapshot(uint8_t** vm_snapshot_data_buffer,
                                    FullSnapshotWriter::kInitialSize);
   ZoneWriteStream isolate_snapshot_data(Api::TopScope(T)->zone(),
                                         FullSnapshotWriter::kInitialSize);
+  const Snapshot::Kind snapshot_kind =
+      is_core ? Snapshot::kFullCore : Snapshot::kFull;
   FullSnapshotWriter writer(
-      Snapshot::kFull, &vm_snapshot_data, &isolate_snapshot_data,
+      snapshot_kind, &vm_snapshot_data, &isolate_snapshot_data,
       nullptr /* vm_image_writer */, nullptr /* isolate_image_writer */);
   writer.WriteFullSnapshot();
   if (vm_snapshot_data_buffer != nullptr) {
@@ -2547,7 +2552,7 @@ DART_EXPORT Dart_Handle Dart_InstanceGetType(Dart_Handle instance) {
   }
   const AbstractType& type =
       AbstractType::Handle(Instance::Cast(obj).GetType(Heap::kNew));
-  return Api::NewHandle(T, type.Canonicalize());
+  return Api::NewHandle(T, type.Canonicalize(T, nullptr));
 }
 
 DART_EXPORT Dart_Handle Dart_FunctionName(Dart_Handle function) {
@@ -4444,7 +4449,7 @@ DART_EXPORT Dart_Handle Dart_New(Dart_Handle type,
       ASSERT(redirect_type.IsInstantiated(kFunctions));
       redirect_type ^= redirect_type.InstantiateFrom(
           type_arguments, Object::null_type_arguments(), kNoneFree, Heap::kNew);
-      redirect_type ^= redirect_type.Canonicalize();
+      redirect_type ^= redirect_type.Canonicalize(T, nullptr);
     }
 
     type_obj = redirect_type.raw();
@@ -6681,13 +6686,12 @@ static void CreateAppAOTSnapshot(
                                      strip ? new (Z) Dwarf(Z) : dwarf)
                        : nullptr;
 
-    BlobImageWriter vm_image_writer(T, &vm_snapshot_instructions, debug_elf,
-                                    elf);
-    BlobImageWriter isolate_image_writer(T, &isolate_snapshot_instructions,
-                                         debug_elf, elf);
+    BlobImageWriter image_writer(T, &vm_snapshot_instructions,
+                                 &isolate_snapshot_instructions, debug_elf,
+                                 elf);
     FullSnapshotWriter writer(Snapshot::kFullAOT, &vm_snapshot_data,
-                              &isolate_snapshot_data, &vm_image_writer,
-                              &isolate_image_writer);
+                              &isolate_snapshot_data, &image_writer,
+                              &image_writer);
 
     if (unit == nullptr || unit->id() == LoadingUnit::kRootId) {
       writer.WriteFullSnapshot(units);
@@ -7028,11 +7032,11 @@ DART_EXPORT Dart_Handle Dart_CreateCoreJITSnapshotAsBlobs(
   ZoneWriteStream isolate_snapshot_instructions(
       Api::TopScope(T)->zone(), FullSnapshotWriter::kInitialSize);
 
-  BlobImageWriter vm_image_writer(T, &vm_snapshot_instructions);
-  BlobImageWriter isolate_image_writer(T, &isolate_snapshot_instructions);
+  BlobImageWriter image_writer(T, &vm_snapshot_instructions,
+                               &isolate_snapshot_instructions);
   FullSnapshotWriter writer(Snapshot::kFullJIT, &vm_snapshot_data,
-                            &isolate_snapshot_data, &vm_image_writer,
-                            &isolate_image_writer);
+                            &isolate_snapshot_data, &image_writer,
+                            &image_writer);
   writer.WriteFullSnapshot();
 
   *vm_snapshot_data_buffer = vm_snapshot_data.buffer();
@@ -7116,9 +7120,10 @@ Dart_CreateAppJITSnapshotAsBlobs(uint8_t** isolate_snapshot_data_buffer,
                                         FullSnapshotWriter::kInitialSize);
   ZoneWriteStream isolate_snapshot_instructions(
       Api::TopScope(T)->zone(), FullSnapshotWriter::kInitialSize);
-  BlobImageWriter isolate_image_writer(T, &isolate_snapshot_instructions);
+  BlobImageWriter image_writer(T, /*vm_instructions=*/nullptr,
+                               &isolate_snapshot_instructions);
   FullSnapshotWriter writer(Snapshot::kFullJIT, nullptr, &isolate_snapshot_data,
-                            nullptr, &isolate_image_writer);
+                            nullptr, &image_writer);
   writer.WriteFullSnapshot();
 
   *isolate_snapshot_data_buffer = isolate_snapshot_data.buffer();
