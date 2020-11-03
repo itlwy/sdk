@@ -674,6 +674,7 @@ char* Dart::Cleanup() {
   Service::SetEmbedderStreamCallbacks(NULL, NULL);
 #endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
   VirtualMemory::Cleanup();
+  FLAG_lazy_async_stacks = false;
   return NULL;
 }
 
