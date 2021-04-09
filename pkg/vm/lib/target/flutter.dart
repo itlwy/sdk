@@ -68,17 +68,17 @@ class FlutterTarget extends VmTarget {
     super.performPreConstantEvaluationTransformations(
         component, coreTypes, libraries, diagnosticReporter,
         logger: logger, changedStructureNotifier: changedStructureNotifier);
-    if (_flutterProgramTransformers.length > 0) {
-      int flutterProgramTransformersLen = _flutterProgramTransformers.length;
-      for (int i=0; i<flutterProgramTransformersLen; i++) {
-        _flutterProgramTransformers[i].transform(component);
-      }
-    }
     if (flags.trackWidgetCreation) {
       if (_widgetTracker == null) {
         _widgetTracker = WidgetCreatorTracker();
       }
       _widgetTracker.transform(component, libraries, changedStructureNotifier);
+    }
+    if (_flutterProgramTransformers.length > 0) {
+      int flutterProgramTransformersLen = _flutterProgramTransformers.length;
+      for (int i=0; i<flutterProgramTransformersLen; i++) {
+        _flutterProgramTransformers[i].transform(component);
+      }
     }
   }
 }
